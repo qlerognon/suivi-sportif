@@ -148,17 +148,34 @@ inputFichier.addEventListener('change', function (event) {
 // forcément celui qui reste affiché dans "Dernière activité importée").
 // En chaînant via onload -> appel récursif, chaque fichier est complètement
 // traité (parsé, affiché, sauvegardé) avant de passer au suivant.
-function importerFichiersEnSequence(fichiers, index) {
+function importerFichiersEnSequence(fichiers, index, promessesSauvegarde) {
+  promessesSauvegarde = promessesSauvegarde || []; // accumulée au fil de la récursion
+
   if (index >= fichiers.length) {
-    // Tous les fichiers ont été traités : petit message récap, uniquement
-    // utile s'il y en avait plus d'un (pour un import simple, le bloc
-    // "Dernière activité importée" qui apparaît suffit comme confirmation).
-    if (fichiers.length > 1) {
+    // Tous les fichiers ont été LUS (parsing + affichage), mais leurs
+    // écritures Firestore peuvent encore être en cours : on attend qu'elles
+    // se terminent (Promise.allSettled, pour ne pas s'arrêter au premier
+    // échec) avant d'afficher un message, pour que ce message reflète ce
+    // qui a VRAIMENT été enregistré plutôt qu'un succès supposé.
+    Promise.allSettled(promessesSauvegarde).then(resultats => {
+      const echecs = resultats.filter(r => r.status === 'rejected');
       const message = document.getElementById('import-message');
-      message.textContent = `✅ ${fichiers.length} activités importées.`;
-      message.style.display = 'block';
-      setTimeout(() => { message.style.display = 'none'; }, 4000);
-    }
+
+      if (echecs.length > 0) {
+        console.error('Échecs de sauvegarde lors de l\'import :', echecs.map(r => r.reason));
+        const premiereErreur = echecs[0].reason;
+        const codeErreur = (premiereErreur && (premiereErreur.code || premiereErreur.message)) || 'erreur inconnue';
+        message.textContent = `⚠️ ${echecs.length} activité(s) sur ${fichiers.length} n'ont PAS pu être enregistrée(s) (${codeErreur}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js), puis réimporte les fichiers concernés.`;
+        message.style.display = 'block';
+      } else if (fichiers.length > 1) {
+        // Petit message récap, uniquement utile s'il y en avait plus d'un
+        // (pour un import simple, le bloc "Dernière activité importée" qui
+        // apparaît suffit comme confirmation).
+        message.textContent = `✅ ${fichiers.length} activités importées.`;
+        message.style.display = 'block';
+        setTimeout(() => { message.style.display = 'none'; }, 4000);
+      }
+    });
     return;
   }
 
@@ -167,8 +184,8 @@ function importerFichiersEnSequence(fichiers, index) {
     const contenuTexte = e.target.result; // le XML brut en texte
     const activite = parserTCX(contenuTexte); // notre fonction de parsing (voir plus bas)
     afficherActivite(activite); // affichage à l'écran (le dernier fichier traité reste affiché)
-    sauvegarderActivite(activite); // sauvegarde en local
-    importerFichiersEnSequence(fichiers, index + 1); // on enchaîne sur le fichier suivant
+    promessesSauvegarde.push(sauvegarderActivite(activite)); // sauvegarde dans Firestore (asynchrone, voir ci-dessus)
+    importerFichiersEnSequence(fichiers, index + 1, promessesSauvegarde); // on enchaîne sur le fichier suivant
   };
   lecteur.readAsText(fichiers[index]);
 }
@@ -385,10 +402,14 @@ function lireReglages() {
 }
 
 function enregistrerReglages(reglages) {
-  db.collection('users').doc(uidActuel).collection('reglages').doc('config').set(reglages);
-  // Pas besoin de mettre à jour reglagesCache ici : l'écouteur Firestore
-  // (demarrerEcouteReglages) le fera dès que l'écriture sera confirmée,
-  // quasi instantanément grâce au cache local de Firestore.
+  // On RENVOIE la promesse (au lieu de l'ignorer) : ça permet à l'appelant
+  // (le bouton "Enregistrer" plus bas) de savoir si l'écriture a vraiment
+  // réussi, au lieu d'afficher un message de succès inconditionnel qui
+  // mentirait en cas d'échec (ex. règles de sécurité Firestore mal
+  // configurées). Pas besoin de mettre à jour reglagesCache ici : l'écouteur
+  // Firestore (demarrerEcouteReglages) le fera dès que l'écriture sera
+  // confirmée, quasi instantanément grâce au cache local de Firestore.
+  return db.collection('users').doc(uidActuel).collection('reglages').doc('config').set(reglages);
 }
 
 // Remplit les champs du formulaire "Réglages" avec les valeurs actuelles du
@@ -430,17 +451,25 @@ document.getElementById('btn-enregistrer-reglages').addEventListener('click', fu
   const fcRepos = parseInt(document.getElementById('reglage-fc-repos').value);
   const fcMax = parseInt(document.getElementById('reglage-fc-max').value);
   const courbeTrimp = document.getElementById('reglage-courbe-trimp').value;
+  const message = document.getElementById('reglages-message');
 
+  // On attend la confirmation de Firestore avant d'afficher quoi que ce
+  // soit : ✅ seulement si l'écriture a vraiment réussi, ❌ avec le code
+  // d'erreur exact sinon (ex. "permission-denied" = règles de sécurité
+  // Firestore à vérifier dans la console).
   enregistrerReglages({
     fcRepos: Number.isFinite(fcRepos) ? fcRepos : null,
     fcMax: Number.isFinite(fcMax) ? fcMax : null,
     courbeTrimp: courbeTrimp
+  }).then(() => {
+    message.textContent = '✅ Réglages enregistrés.';
+    message.style.display = 'block';
+    setTimeout(() => { message.style.display = 'none'; }, 3000);
+  }).catch(erreur => {
+    console.error('Erreur d\'enregistrement des réglages :', erreur);
+    message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+    message.style.display = 'block';
   });
-
-  const message = document.getElementById('reglages-message');
-  message.textContent = '✅ Réglages enregistrés.';
-  message.style.display = 'block';
-  setTimeout(() => { message.style.display = 'none'; }, 3000);
 });
 
 // ============================================================
@@ -470,9 +499,12 @@ function lireDonneesVO2max() {
 }
 
 function enregistrerDonneesVO2max(data) {
-  db.collection('users').doc(uidActuel).collection('vo2max').doc('config').set(data);
-  // Pas besoin de mettre à jour vo2maxCache ici : l'écouteur Firestore
+  // On RENVOIE la promesse, pour la même raison que enregistrerReglages()
+  // ci-dessus : détecter un échec d'écriture (ex. règles de sécurité) au
+  // lieu d'afficher un succès qui n'aurait pas eu lieu. Pas besoin de
+  // mettre à jour vo2maxCache ici : l'écouteur Firestore
   // (demarrerEcouteVO2max) le fera dès que l'écriture sera confirmée.
+  return db.collection('users').doc(uidActuel).collection('vo2max').doc('config').set(data);
 }
 
 // Détermine la zone d'entraînement d'une FC moyenne donnée, à partir des
@@ -566,17 +598,21 @@ document.getElementById('btn-enregistrer-vo2max').addEventListener('click', func
     const valeur = parseInt(document.getElementById('zone-limite-' + i).value);
     return Number.isFinite(valeur) ? valeur : null;
   });
+  const message = document.getElementById('vo2max-message');
 
   enregistrerDonneesVO2max({
     vo2max: Number.isFinite(vo2max) ? vo2max : null,
     dateTest,
     limites
+  }).then(() => {
+    message.textContent = '✅ Données enregistrées.';
+    message.style.display = 'block';
+    setTimeout(() => { message.style.display = 'none'; }, 3000);
+  }).catch(erreur => {
+    console.error('Erreur d\'enregistrement VO2max :', erreur);
+    message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+    message.style.display = 'block';
   });
-
-  const message = document.getElementById('vo2max-message');
-  message.textContent = '✅ Données enregistrées.';
-  message.style.display = 'block';
-  setTimeout(() => { message.style.display = 'none'; }, 3000);
 });
 
 // ============================================================
@@ -1571,9 +1607,17 @@ function allegerPourFirestore(activite) {
 
 function sauvegarderActivite(activite) {
   const activiteAEcrire = allegerPourFirestore(activite);
-  db.collection('users').doc(uidActuel).collection('activites').doc(activite.id).set(activiteAEcrire)
+  // On RENVOIE la promesse (et on RE-LANCE l'erreur après l'avoir logguée,
+  // avec `throw`) : ça permet à importerFichiersEnSequence() de détecter un
+  // échec d'écriture (ex. règles de sécurité Firestore) et de prévenir
+  // l'utilisateur au lieu d'afficher un message de succès trompeur alors
+  // que l'activité n'a en réalité pas été enregistrée.
+  return db.collection('users').doc(uidActuel).collection('activites').doc(activite.id).set(activiteAEcrire)
     .then(() => console.log('Activité sauvegardée avec succès :', activite.id))
-    .catch(erreur => console.error('Erreur de sauvegarde de l\'activité :', erreur));
+    .catch(erreur => {
+      console.error('Erreur de sauvegarde de l\'activité :', erreur);
+      throw erreur;
+    });
 }
 
 // ============================================================
