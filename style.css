@@ -8,6 +8,19 @@ body {
   color: #222;
 }
 
+/* Filet de sécurité : sur iPhone/Safari, un champ de saisie affiché avec un
+   texte de moins de 16px fait automatiquement ZOOMER la page entière au
+   moment où on le touche (comportement du navigateur, pas un bug de
+   l'app) — gênant en usage tactile. La plupart des champs de l'app ont déjà
+   `font-size: 1em` via leur classe (reglages-grid, rpe-zone...), mais cette
+   règle générale couvre aussi ceux qui n'en ont pas, sans rien changer sur
+   ordinateur (1em = la taille de police déjà utilisée partout ailleurs). */
+input,
+select,
+textarea {
+  font-size: 1em;
+}
+
 h1 {
   text-align: center;
 }
@@ -62,8 +75,12 @@ h1 {
 /* --- Navigation par onglets (Accueil / Activité / Paramètres) --- */
 #nav-principale {
   display: flex;
+  flex-wrap: wrap; /* passe les onglets à la ligne s'ils ne tiennent pas sur
+                       un seul rang (petit écran) plutôt que de les faire
+                       déborder hors de l'écran, invisibles et inatteignables */
   justify-content: center;
   gap: 8px;
+  row-gap: 4px;
   margin-bottom: 25px;
   border-bottom: 2px solid #ddd;
   padding-bottom: 0;
@@ -406,6 +423,21 @@ h1 {
   box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 
+/* Permet à un tableau large (trop de colonnes pour un écran de téléphone)
+   de défiler HORIZONTALEMENT (glisser du doigt) à l'intérieur de son
+   cadre, plutôt que d'écraser ses colonnes jusqu'à les rendre illisibles
+   ou de faire déborder toute la page. Sans effet sur grand écran (le
+   tableau tient déjà dans sa largeur, donc rien ne déborde et il n'y a
+   rien à faire défiler) : la classe peut donc être laissée active en
+   permanence, pas seulement en dessous d'une certaine largeur d'écran.
+   Utilisée à la fois sur les tableaux déjà présents dans index.html et
+   sur ceux générés dynamiquement en JS (records automatiques, segments —
+   voir afficherRecordsAutomatiques/afficherSegments dans script.js). */
+.tableau-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch; /* défilement fluide sur iOS */
+}
+
 #tableau-activites {
   width: 100%;
   border-collapse: collapse;
@@ -608,4 +640,60 @@ h1 {
 .segment-record {
   font-weight: bold;
   background-color: #f0f9f3;
+}
+
+/* ============================================================
+   ADAPTATION MOBILE (téléphone/petit écran)
+   Tout ce qui précède est déjà "fluide" par nature (grilles en
+   auto-fit/minmax, flex-wrap...) et s'adapte donc déjà tout seul à peu
+   près correctement. Les règles ci-dessous corrigent les quelques
+   endroits qui ne s'adaptaient PAS tout seuls : les tableaux larges (trop
+   de colonnes pour un écran de téléphone) et l'espacement général, pensé
+   au départ pour un écran d'ordinateur. Rien ici ne change quoi que ce
+   soit sur grand écran (ordinateur) : ces règles ne s'activent qu'en
+   dessous de la largeur indiquée.
+   ============================================================ */
+@media (max-width: 700px) {
+  body {
+    margin: 15px auto; /* les 40px du haut/bas d'origine sont pensés pour un
+                           grand écran ; sur téléphone ça pousse tout le
+                           contenu utile hors de l'écran initial pour rien */
+    padding: 0 10px;
+  }
+
+  h1 {
+    font-size: 1.4em;
+  }
+
+  /* Onglets un peu plus grands (plus faciles à toucher du doigt) et un peu
+     moins larges (pour que 2 tiennent mieux côte à côte avant de passer à
+     la ligne, voir flex-wrap plus haut). */
+  .nav-onglet {
+    padding: 12px 14px;
+    font-size: 0.95em;
+  }
+
+  /* Sur grand écran, 2 colonnes de cases "stat" (ex. Durée / Distance...)
+     tiennent bien. Sur téléphone, ça comprime trop les valeurs longues
+     (ex. le message "N/A (renseigne tes FC...)" de la charge) : une seule
+     colonne, empilée, reste lisible dans tous les cas. */
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Tableaux larges (historique, tours, records, segments) : voir la
+     classe .tableau-scroll plus bas, appliquée directement dans le HTML
+     (et dans le JS pour les tableaux générés dynamiquement) — elle laisse
+     le tableau à sa largeur naturelle et le rend scrollable
+     HORIZONTALEMENT plutôt que d'écraser les colonnes jusqu'à les rendre
+     illisibles.
+
+     Boutons un peu plus grands, plus faciles à toucher précisément du
+     doigt qu'à cliquer précisément avec une souris. */
+  .bouton-secondaire,
+  .bouton-danger,
+  .bouton-periode,
+  .bouton-import {
+    padding: 10px 16px;
+  }
 }
