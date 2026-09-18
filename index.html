@@ -58,6 +58,7 @@
   <nav id="nav-principale">
     <button class="nav-onglet actif" data-page="accueil">🏠 Accueil</button>
     <button class="nav-onglet" data-page="activite">📋 Activité</button>
+    <button class="nav-onglet" data-page="records">🏆 Records</button>
     <button class="nav-onglet" data-page="parametres">⚙️ Paramètres</button>
   </nav>
 
@@ -308,6 +309,53 @@
         </div>
       </div>
     </section>
+  </section>
+
+  <!-- ============================================================
+       PAGE RECORDS : records personnels, calculés automatiquement à partir
+       des activités déjà importées (meilleur temps sur les distances
+       standards), ou saisis à la main (pour tout ce que le calcul
+       automatique ne peut pas trouver). Voir la section "RECORDS
+       PERSONNELS" dans script.js.
+       ============================================================ -->
+  <section id="page-records" class="page" style="display:none;">
+
+    <section id="records-auto">
+      <h2>🏆 Records automatiques</h2>
+      <p class="description">Calculés à partir de tes activités déjà importées : pour chaque sport, le meilleur temps réalisé sur chacune des distances standards (1 km, 5 km, 10 km, semi-marathon, marathon), en cherchant la meilleure portion de chaque activité — pas seulement les activités qui font pile cette distance. Clique sur une ligne pour ouvrir l'activité correspondante.</p>
+      <div id="zone-records-auto"></div>
+      <p id="records-auto-message" class="message-neutre" style="display:none;">Importe au moins une activité pour voir apparaître tes records automatiques ici.</p>
+    </section>
+
+    <section id="records-manuels">
+      <h2>✍️ Records manuels</h2>
+      <p class="description">Pour tout ce que le calcul automatique ne peut pas trouver : un record antérieur à l'usage de cet outil, une distance non standard, une autre performance (ex. nombre de tractions, poids soulevé...). Tu peux éventuellement le relier à une activité déjà importée.</p>
+
+      <div class="reglages-grid">
+        <label for="record-nom">Nom du record
+          <input type="text" id="record-nom" placeholder="ex : 10 km">
+        </label>
+        <label for="record-valeur">Valeur
+          <input type="text" id="record-valeur" placeholder="ex : 42:18">
+        </label>
+        <label for="record-date">Date (optionnel)
+          <input type="date" id="record-date">
+        </label>
+        <label for="record-activite-liee">Activité liée (optionnel)
+          <select id="record-activite-liee">
+            <option value="">(aucune)</option>
+          </select>
+        </label>
+      </div>
+      <button id="btn-ajouter-record" class="bouton-secondaire">Ajouter le record</button>
+      <p id="records-manuels-message" class="message-info" style="display:none;"></p>
+
+      <table id="tableau-records-manuels" class="tableau-recap">
+        <thead><tr><th>Nom</th><th>Valeur</th><th>Date</th><th>Activité</th><th></th></tr></thead>
+        <tbody id="corps-tableau-records-manuels"></tbody>
+      </table>
+    </section>
+
   </section>
 
   <!-- ============================================================
