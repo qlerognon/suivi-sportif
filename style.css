@@ -499,3 +499,100 @@ h1 {
 .bouton-supprimer-record:hover {
   opacity: 0.7;
 }
+
+/* --- Segments (page Records) --- */
+#segments {
+  background: white;
+  border-radius: 8px;
+  padding: 15px 20px 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  margin-top: 25px;
+}
+#segments h2 {
+  margin-top: 0;
+  font-size: 1.1em;
+}
+
+/* Le bloc "Définir un nouveau segment" est un <details> natif (pas besoin
+   de JS pour l'ouvrir/fermer) : juste un peu d'espace et un curseur "main"
+   sur le résumé cliquable. */
+#segment-nouveau {
+  margin-bottom: 10px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+#segment-nouveau summary {
+  cursor: pointer;
+  font-weight: bold;
+  color: #2c3e50;
+}
+#segment-nouveau[open] summary {
+  margin-bottom: 12px;
+}
+#segment-definition-zone {
+  margin-top: 15px;
+}
+
+.segment-sliders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.segment-sliders label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85em;
+  color: #555;
+  gap: 4px;
+}
+.segment-sliders input[type="range"] {
+  width: 100%;
+}
+
+/* Un bloc par segment défini, avec son propre petit tableau d'efforts */
+.segment-bloc {
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid #eee;
+}
+.segment-bloc:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.segment-entete {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.segment-entete h3 {
+  margin: 0 0 4px 0;
+  font-size: 1em;
+  color: #2c3e50;
+}
+.segment-bloc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin-top: 10px;
+}
+.segment-bloc th,
+.segment-bloc td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+}
+.segment-bloc thead {
+  background-color: #eef1f3;
+}
+.segment-bloc tbody tr:hover {
+  background-color: #f5f5f5;
+}
+/* Ligne du meilleur temps (record) sur ce segment, mise en avant */
+.segment-record {
+  font-weight: bold;
+  background-color: #f0f9f3;
+}
