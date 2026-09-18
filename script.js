@@ -38,13 +38,14 @@ db.enablePersistence().catch(erreur => {
 });
 
 // Fonctions "annulation" des écouteurs Firestore (activités/réglages/VO2max/
-// records) : utiles pour tout arrêter proprement à la déconnexion, avant
-// qu'un nouveau compte (ou une reconnexion) ne redémarre des écouteurs
-// par-dessus.
+// records/segments) : utiles pour tout arrêter proprement à la déconnexion,
+// avant qu'un nouveau compte (ou une reconnexion) ne redémarre des
+// écouteurs par-dessus.
 let arreterEcouteActivites = null;
 let arreterEcouteReglages = null;
 let arreterEcouteVO2max = null;
 let arreterEcouteRecords = null;
+let arreterEcouteSegments = null;
 
 auth.onAuthStateChanged(function (user) {
   if (user) {
@@ -57,6 +58,7 @@ auth.onAuthStateChanged(function (user) {
     arreterEcouteReglages = demarrerEcouteReglages(uidActuel);
     arreterEcouteVO2max = demarrerEcouteVO2max(uidActuel);
     arreterEcouteRecords = demarrerEcouteRecords(uidActuel);
+    arreterEcouteSegments = demarrerEcouteSegments(uidActuel);
   } else {
     // Déconnecté (ou pas encore connecté) : on coupe les écouteurs en cours
     // s'il y en avait, on vide l'état local, et on affiche l'écran de connexion.
@@ -64,9 +66,11 @@ auth.onAuthStateChanged(function (user) {
     if (arreterEcouteReglages) arreterEcouteReglages();
     if (arreterEcouteVO2max) arreterEcouteVO2max();
     if (arreterEcouteRecords) arreterEcouteRecords();
+    if (arreterEcouteSegments) arreterEcouteSegments();
     uidActuel = null;
     activitesEnMemoire = [];
     recordsManuelsEnMemoire = [];
+    segmentsEnMemoire = [];
 
     document.getElementById('app-principal').style.display = 'none';
     document.getElementById('ecran-connexion').style.display = 'block';
@@ -124,6 +128,15 @@ function afficherPage(nomPage) {
     afficherApercu();
     afficherRecapSemaines();
     afficherGraphiqueACWR();
+  }
+
+  // Les efforts sur segments sont plus coûteux à calculer que le reste de
+  // cette page (comparaison point par point avec le tracé de référence de
+  // chaque segment, voir la section SEGMENTS plus bas) : on ne les
+  // recalcule PAS à chaque changement d'activité comme le reste (voir
+  // rafraichirAffichageActivites), seulement en arrivant sur cet onglet.
+  if (nomPage === 'records') {
+    afficherSegments();
   }
 }
 
@@ -1596,6 +1609,15 @@ function rafraichirAffichageActivites() {
   afficherGraphiqueACWR();
   afficherRecordsAutomatiques();
   remplirSelectActiviteLiee();
+  remplirSelectActiviteSourceSegment();
+  // Les segments eux-mêmes (voir plus bas) ne sont PAS recalculés ici : trop
+  // coûteux pour un rafraîchissement aussi fréquent (déclenché par le
+  // moindre changement de réglages/VO2max, pas seulement les activités).
+  // Recalculés seulement en arrivant sur l'onglet Records (afficherPage) ou
+  // si on y est déjà au moment où les activités changent.
+  if (document.getElementById('page-records') && document.getElementById('page-records').style.display === 'block') {
+    afficherSegments();
+  }
 }
 
 // --- Sauvegarde d'une activité dans Firestore ---
@@ -2397,3 +2419,424 @@ document.getElementById('btn-ajouter-record').addEventListener('click', function
 });
 
 document.getElementById('btn-migrer-donnees').addEventListener('click', migrerDonneesLocales);
+
+// ============================================================
+// SEGMENTS (façon Strava)
+// Un segment est une portion de parcours DÉFINIE PAR L'UTILISATEUR (deux
+// curseurs sur le tracé GPS d'une activité déjà importée), qu'on cherche
+// ensuite à repérer dans TOUTES les activités du même sport — passées
+// (recherche rétroactive dans l'historique) et futures (recalculé à chaque
+// nouvel import). Stocké dans Firestore (users/{uid}/segments/{id}) :
+//   { id, nom, sport, distanceMetres, activiteSourceId, pointsReference }
+// `pointsReference` est le tracé de référence du segment (juste {lat, lon}
+// par point, ré-échantillonné à ~15 m d'écart — voir sousEchantillonnerRef
+// plus bas), extrait de l'activité source au moment de la création.
+//
+// IMPORTANT — ce que la détection fait et ne fait PAS :
+// Ce n'est PAS un vrai algorithme de "map-matching" (sujet de recherche à
+// part entière) : c'est une heuristique simple mais raisonnablement fiable
+// pour un usage perso, à tolérance fixe (TOLERANCE_SEGMENT_METRES) : pour
+// chaque point d'une activité candidate, on cherche le point de RÉFÉRENCE
+// le plus proche ; tant que cette distance reste sous la tolérance ET que
+// l'indice du point de référence le plus proche ne recule pas (au-delà
+// d'une petite marge, pour absorber le bruit GPS) au fil du temps, on
+// considère qu'on suit le segment DANS LE BON SENS (exigé par l'utilisateur
+// — un passage dans l'autre sens n'est jamais compté). Un passage complet
+// (du début à la fin du tracé de référence) donne un "effort" avec sa durée.
+// Limites connues : peut rater un passage si le signal GPS dérive plus que
+// la tolérance sur une portion (ex. sous couvert forestier dense, tunnel),
+// ou détecter à tort un passage sur un tracé très proche géométriquement
+// mais différent (ex. deux allers-retours parallèles sur un même chemin
+// large). Suffisant pour un usage perso raisonnable ; à ne pas traiter
+// comme une mesure de précision sportive officielle.
+// ============================================================
+
+const TOLERANCE_SEGMENT_METRES = 40; // rayon de tolérance GPS pour "être sur" le tracé de référence
+const DISTANCE_MIN_SEGMENT_METRES = 50; // en dessous, la marge d'erreur GPS dépasserait la longueur du segment lui-même
+
+// Ré-échantillonne une liste de points {lat, lon, distance} pour ne garder
+// qu'un point tous les `espacementCibleMetres` environ (toujours le premier
+// et le dernier) : évite de stocker un point de référence par seconde
+// (inutile pour la détection, qui tolère 40 m d'écart) tout en gardant les
+// points de référence assez rapprochés pour qu'un simple "point de
+// référence le plus proche" (voir plus haut) approxime correctement la
+// distance au TRACÉ (pas juste à un point isolé).
+function sousEchantillonnerRef(points, espacementCibleMetres) {
+  if (points.length === 0) return [];
+  const resultat = [points[0]];
+  let distanceDepuisDernierGarde = points[0].distance;
+
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].distance - distanceDepuisDernierGarde >= espacementCibleMetres) {
+      resultat.push(points[i]);
+      distanceDepuisDernierGarde = points[i].distance;
+    }
+  }
+  const dernier = points[points.length - 1];
+  if (resultat[resultat.length - 1] !== dernier) resultat.push(dernier);
+
+  return resultat;
+}
+
+// --- Définition d'un nouveau segment (formulaire + carte + curseurs) ---
+
+let segmentActiviteSourceCourante = null; // activité actuellement choisie comme source
+let segmentPointsGPSCourants = [];        // ses points GPS valides (lat/lon/distance), triés par temps
+let carteLeafletSegment = null;           // référence à la mini-carte de définition (détruite/recréée à chaque activité choisie)
+let traceSegmentSurbrillance = null;      // la polyline rouge (portion sélectionnée), redessinée à chaque déplacement des curseurs
+
+// Remplit le menu déroulant "Activité source" avec les activités qui ONT un
+// tracé GPS exploitable (au moins 2 points avec lat/lon), la plus récente en
+// premier. Une activité sans GPS (ex. tapis de course sans capteur externe)
+// ne peut pas servir à définir un segment.
+function remplirSelectActiviteSourceSegment() {
+  const select = document.getElementById('segment-activite-source');
+  if (!select) return;
+
+  const valeurActuelle = select.value;
+  const activitesAvecGPS = activitesEnMemoire
+    .filter(act => (act.points || []).filter(p => p.lat != null && p.lon != null).length >= 2)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  select.innerHTML = '<option value="">-- choisir une activité --</option>' +
+    activitesAvecGPS.map(act =>
+      `<option value="${act.id}">${formatDate(act.date)} — ${act.sport} (${(act.distanceMetres / 1000).toFixed(2)} km)</option>`
+    ).join('');
+
+  if ([...select.options].some(o => o.value === valeurActuelle)) {
+    select.value = valeurActuelle;
+  }
+}
+
+document.getElementById('segment-activite-source').addEventListener('change', function () {
+  const zone = document.getElementById('segment-definition-zone');
+  const activite = activitesEnMemoire.find(a => a.id === this.value);
+
+  if (!activite) {
+    segmentActiviteSourceCourante = null;
+    segmentPointsGPSCourants = [];
+    zone.style.display = 'none';
+    return;
+  }
+
+  segmentActiviteSourceCourante = activite;
+  // On ne garde que les points GPS valides ET avec une distance connue
+  // (nécessaire pour calculer la distance du segment sélectionné), triés
+  // par ordre chronologique (normalement déjà le cas dans `points`).
+  segmentPointsGPSCourants = (activite.points || [])
+    .filter(p => p.lat != null && p.lon != null && p.distance != null && p.time != null)
+    .slice()
+    .sort((a, b) => new Date(a.time) - new Date(b.time));
+
+  const sliderDebut = document.getElementById('segment-slider-debut');
+  const sliderFin = document.getElementById('segment-slider-fin');
+  const dernierIndex = Math.max(1, segmentPointsGPSCourants.length - 1);
+  sliderDebut.min = 0;
+  sliderDebut.max = dernierIndex;
+  sliderDebut.value = 0;
+  sliderFin.min = 0;
+  sliderFin.max = dernierIndex;
+  sliderFin.value = dernierIndex;
+
+  zone.style.display = 'block';
+  dessinerApercuSegment();
+});
+
+// Redessine la mini-carte (tracé complet en bleu, portion sélectionnée par
+// les curseurs en rouge par-dessus) et met à jour la distance affichée.
+// Appelée à chaque déplacement d'un des deux curseurs.
+function dessinerApercuSegment() {
+  if (segmentPointsGPSCourants.length < 2) return;
+
+  const sliderDebut = document.getElementById('segment-slider-debut');
+  const sliderFin = document.getElementById('segment-slider-fin');
+  let debut = parseInt(sliderDebut.value);
+  let fin = parseInt(sliderFin.value);
+
+  // La fin doit toujours être après le début (au moins 1 point d'écart) :
+  // si l'utilisateur croise les deux curseurs, on repousse l'autre plutôt
+  // que d'accepter un segment de longueur négative ou nulle.
+  if (fin <= debut) {
+    fin = Math.min(segmentPointsGPSCourants.length - 1, debut + 1);
+    sliderFin.value = fin;
+  }
+
+  const tousLesPoints = segmentPointsGPSCourants.map(p => [p.lat, p.lon]);
+  const pointsSelectionnes = segmentPointsGPSCourants.slice(debut, fin + 1);
+  const coordsSelectionnees = pointsSelectionnes.map(p => [p.lat, p.lon]);
+
+  if (carteLeafletSegment !== null) {
+    carteLeafletSegment.remove();
+  }
+  carteLeafletSegment = L.map('carte-segment').setView(tousLesPoints[0], 14);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(carteLeafletSegment);
+  L.polyline(tousLesPoints, { color: 'blue', weight: 3, opacity: 0.6 }).addTo(carteLeafletSegment);
+  traceSegmentSurbrillance = L.polyline(coordsSelectionnees, { color: 'red', weight: 5 }).addTo(carteLeafletSegment);
+  carteLeafletSegment.fitBounds(traceSegmentSurbrillance.getBounds(), { padding: [20, 20] });
+
+  const distanceMetres = pointsSelectionnes[pointsSelectionnes.length - 1].distance - pointsSelectionnes[0].distance;
+  document.getElementById('segment-distance-apercu').textContent = (distanceMetres / 1000).toFixed(2) + ' km';
+}
+
+document.getElementById('segment-slider-debut').addEventListener('input', dessinerApercuSegment);
+document.getElementById('segment-slider-fin').addEventListener('input', dessinerApercuSegment);
+
+document.getElementById('btn-creer-segment').addEventListener('click', function () {
+  const nom = document.getElementById('segment-nom').value.trim();
+  const message = document.getElementById('segment-definition-message');
+
+  if (!nom) {
+    message.textContent = '❌ Le nom du segment est obligatoire.';
+    message.style.display = 'block';
+    return;
+  }
+  if (!segmentActiviteSourceCourante || segmentPointsGPSCourants.length < 2) {
+    message.textContent = '❌ Choisis une activité source avec un tracé GPS.';
+    message.style.display = 'block';
+    return;
+  }
+
+  const sliderDebut = document.getElementById('segment-slider-debut');
+  const sliderFin = document.getElementById('segment-slider-fin');
+  const debut = parseInt(sliderDebut.value);
+  const fin = parseInt(sliderFin.value);
+  if (fin <= debut) {
+    message.textContent = '❌ La fin du segment doit être après le début.';
+    message.style.display = 'block';
+    return;
+  }
+
+  const pointsSelectionnes = segmentPointsGPSCourants.slice(debut, fin + 1);
+  const distanceMetres = pointsSelectionnes[pointsSelectionnes.length - 1].distance - pointsSelectionnes[0].distance;
+  if (distanceMetres < DISTANCE_MIN_SEGMENT_METRES) {
+    message.textContent = `❌ Segment trop court (minimum ${DISTANCE_MIN_SEGMENT_METRES} m) : la marge d'erreur GPS le rendrait impossible à détecter fiablement.`;
+    message.style.display = 'block';
+    return;
+  }
+
+  const pointsReference = sousEchantillonnerRef(pointsSelectionnes, 15).map(p => ({ lat: p.lat, lon: p.lon }));
+  const id = 'segment-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+  db.collection('users').doc(uidActuel).collection('segments').doc(id).set({
+    id,
+    nom,
+    sport: segmentActiviteSourceCourante.sport,
+    distanceMetres: Math.round(distanceMetres),
+    activiteSourceId: segmentActiviteSourceCourante.id,
+    pointsReference
+  })
+    .then(() => {
+      message.textContent = '✅ Segment créé. Recherche des passages en cours...';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 4000);
+      document.getElementById('segment-nom').value = '';
+      document.getElementById('segment-nouveau').open = false;
+    })
+    .catch(erreur => {
+      console.error('Erreur de création du segment :', erreur);
+      message.textContent = `❌ Échec de la création (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+// --- Détection des passages (efforts) sur un segment ---
+
+// Cherche, dans UNE activité, tous les passages complets sur `segment`, dans
+// le MÊME SENS que sa définition (voir l'explication détaillée en tête de
+// cette section). Renvoie un tableau d'efforts { dureeSecondes, activite }
+// (généralement 0 ou 1, mais peut en contenir plusieurs si l'activité
+// repasse plusieurs fois par le même tracé, ex. plusieurs tours).
+function detecterEffortsSurSegment(segment, activite) {
+  if (activite.sport !== segment.sport) return [];
+
+  const ref = segment.pointsReference;
+  if (!ref || ref.length < 2) return [];
+
+  const pointsGPS = (activite.points || []).filter(p => p.lat != null && p.lon != null && p.time != null);
+  if (pointsGPS.length < 2) return [];
+  const points = ajouterTempsEcoule(pointsGPS);
+  if (points.length < 2) return [];
+
+  // Marges (en nombre de points de référence) pour considérer qu'on est
+  // "au tout début" / "à la toute fin" du tracé de référence, et pour
+  // tolérer un léger recul (dérive GPS, virage serré) sans le traiter comme
+  // un vrai rebroussement (mauvais sens).
+  const margeExtremites = Math.max(2, Math.round(ref.length * 0.05));
+  const margeRecul = Math.max(2, Math.round(ref.length * 0.03));
+
+  const efforts = [];
+  let enCours = false;
+  let indexEntree = null;
+  let meilleurIndexRefAtteint = 0;
+
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i];
+
+    // Point de référence le plus proche de ce point de l'activité (simple
+    // recherche linéaire : `ref` reste de taille modeste, voir
+    // sousEchantillonnerRef).
+    let meilleurIndexRef = -1;
+    let meilleureDistanceM = Infinity;
+    for (let r = 0; r < ref.length; r++) {
+      const d = distanceHaversine(point.lat, point.lon, ref[r].lat, ref[r].lon) * 1000;
+      if (d < meilleureDistanceM) {
+        meilleureDistanceM = d;
+        meilleurIndexRef = r;
+      }
+    }
+
+    const surLeTrace = meilleureDistanceM <= TOLERANCE_SEGMENT_METRES;
+
+    if (!enCours) {
+      // On cherche un DÉPART : proche du tracé ET proche du DÉBUT du segment
+      // de référence (pas n'importe où dessus).
+      if (surLeTrace && meilleurIndexRef <= margeExtremites) {
+        enCours = true;
+        indexEntree = i;
+        meilleurIndexRefAtteint = meilleurIndexRef;
+      }
+      continue;
+    }
+
+    if (!surLeTrace) {
+      // Trop loin du tracé de référence : on abandonne cette tentative
+      // (pas d'effort partiel comptabilisé).
+      enCours = false;
+      indexEntree = null;
+      continue;
+    }
+
+    if (meilleurIndexRef < meilleurIndexRefAtteint - margeRecul) {
+      // Recul net le long du tracé de référence : mauvais sens (ou fausse
+      // piste croisant le segment) — on abandonne cette tentative.
+      enCours = false;
+      indexEntree = null;
+      continue;
+    }
+    meilleurIndexRefAtteint = Math.max(meilleurIndexRefAtteint, meilleurIndexRef);
+
+    if (meilleurIndexRef >= ref.length - 1 - margeExtremites) {
+      // Arrivé près de la FIN du tracé de référence : passage complet.
+      const duree = point.tempsEcouleSecondes - points[indexEntree].tempsEcouleSecondes;
+      if (duree > 0) {
+        efforts.push({ dureeSecondes: Math.round(duree), activite });
+      }
+      enCours = false;
+      indexEntree = null;
+      meilleurIndexRefAtteint = 0;
+    }
+  }
+
+  return efforts;
+}
+
+// Rassemble les efforts détectés sur `segment` à travers TOUTES les
+// activités connues (donc y compris celles importées avant la création du
+// segment : détection rétroactive demandée par l'utilisateur), triés du
+// plus rapide au plus lent.
+function calculerEffortsSegment(segment) {
+  const tousLesEfforts = [];
+  activitesEnMemoire.forEach(activite => {
+    detecterEffortsSurSegment(segment, activite).forEach(effort => tousLesEfforts.push(effort));
+  });
+  tousLesEfforts.sort((a, b) => a.dureeSecondes - b.dureeSecondes);
+  return tousLesEfforts;
+}
+
+// --- Firestore : liste des segments + affichage ---
+
+let segmentsEnMemoire = [];
+
+// Écoute Firestore en continu (voir demarrerEcouteReglages plus haut pour le
+// même principe en détail). Renvoie une fonction pour arrêter l'écoute (à la
+// déconnexion).
+function demarrerEcouteSegments(uid) {
+  return db.collection('users').doc(uid).collection('segments')
+    .onSnapshot(function (snapshot) {
+      segmentsEnMemoire = snapshot.docs.map(doc => doc.data());
+      // Un segment vient peut-être d'être créé/supprimé : on ne recalcule
+      // les efforts (coûteux) que si on est effectivement en train de
+      // regarder l'onglet Records.
+      if (document.getElementById('page-records') && document.getElementById('page-records').style.display === 'block') {
+        afficherSegments();
+      }
+    }, function (erreur) {
+      console.error('Erreur d\'écoute des segments :', erreur);
+    });
+}
+
+function supprimerSegment(id) {
+  db.collection('users').doc(uidActuel).collection('segments').doc(id).delete()
+    .catch(erreur => console.error('Erreur de suppression du segment :', erreur));
+  // Pas besoin de rafraîchir explicitement : l'écouteur Firestore
+  // (demarrerEcouteSegments) s'en charge dès que la suppression est confirmée.
+}
+
+// Reconstruit l'affichage complet des segments (un bloc par segment, avec
+// son tableau d'efforts triés du plus rapide au plus lent, le record mis en
+// avant). Volontairement PAS appelée automatiquement à chaque changement
+// d'activité (voir rafraichirAffichageActivites) : recalculer les efforts de
+// TOUS les segments contre TOUTES les activités est plus coûteux que le
+// reste de cette page, donc seulement déclenché en arrivant sur l'onglet
+// Records (afficherPage) ou si on y est déjà.
+function afficherSegments() {
+  const zone = document.getElementById('zone-segments');
+  const message = document.getElementById('segments-message');
+  if (!zone || !message) return;
+
+  if (segmentsEnMemoire.length === 0) {
+    zone.innerHTML = '';
+    message.style.display = 'block';
+    return;
+  }
+  message.style.display = 'none';
+  zone.innerHTML = '';
+
+  segmentsEnMemoire.forEach(segment => {
+    const efforts = calculerEffortsSegment(segment);
+
+    const bloc = document.createElement('div');
+    bloc.className = 'segment-bloc';
+
+    const entete = document.createElement('div');
+    entete.className = 'segment-entete';
+    entete.innerHTML = `
+      <div>
+        <h3>${segment.nom}</h3>
+        <p class="description">${segment.sport} — ${(segment.distanceMetres / 1000).toFixed(2)} km — ${efforts.length > 0 ? efforts.length + ' passage(s) détecté(s)' : 'aucun passage détecté pour l\'instant'}</p>
+      </div>
+      <button type="button" class="bouton-danger bouton-supprimer-segment" title="Supprimer ce segment">🗑️</button>
+    `;
+    entete.querySelector('.bouton-supprimer-segment').addEventListener('click', () => supprimerSegment(segment.id));
+    bloc.appendChild(entete);
+
+    if (efforts.length > 0) {
+      const tableau = document.createElement('table');
+      tableau.innerHTML = '<thead><tr><th>Temps</th><th>Allure</th><th>Date</th><th>Sport</th></tr></thead>';
+      const corps = document.createElement('tbody');
+
+      efforts.forEach((effort, index) => {
+        const allureMinParKm = (effort.dureeSecondes / 60) / (segment.distanceMetres / 1000);
+        const ligne = document.createElement('tr');
+        if (index === 0) ligne.classList.add('segment-record');
+        ligne.style.cursor = 'pointer';
+        ligne.title = "Voir l'activité";
+        ligne.innerHTML = `
+          <td>${index === 0 ? '🏆 ' : ''}${formatDureeRecord(effort.dureeSecondes)}</td>
+          <td>${formatAllure(allureMinParKm)} /km</td>
+          <td>${formatDate(effort.activite.date)}</td>
+          <td>${effort.activite.sport}</td>
+        `;
+        ligne.addEventListener('click', () => ouvrirActiviteParId(effort.activite.id));
+        corps.appendChild(ligne);
+      });
+
+      tableau.appendChild(corps);
+      bloc.appendChild(tableau);
+    }
+
+    zone.appendChild(bloc);
+  });
+}
