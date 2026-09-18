@@ -2406,7 +2406,12 @@ function afficherRecordsAutomatiques() {
     });
 
     tableau.appendChild(corps);
-    bloc.appendChild(tableau);
+    // .tableau-scroll (voir style.css) : permet au tableau de défiler
+    // horizontalement sur petit écran plutôt que d'écraser ses colonnes.
+    const conteneurScroll = document.createElement('div');
+    conteneurScroll.className = 'tableau-scroll';
+    conteneurScroll.appendChild(tableau);
+    bloc.appendChild(conteneurScroll);
     zone.appendChild(bloc);
   });
 }
@@ -2940,7 +2945,12 @@ function afficherSegments() {
       });
 
       tableau.appendChild(corps);
-      bloc.appendChild(tableau);
+      // .tableau-scroll (voir style.css) : permet au tableau de défiler
+      // horizontalement sur petit écran plutôt que d'écraser ses colonnes.
+      const conteneurScroll = document.createElement('div');
+      conteneurScroll.className = 'tableau-scroll';
+      conteneurScroll.appendChild(tableau);
+      bloc.appendChild(conteneurScroll);
     }
 
     zone.appendChild(bloc);
