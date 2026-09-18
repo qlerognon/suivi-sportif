@@ -307,21 +307,51 @@ function parserTCX(xmlTexte) {
   });
 
   // --- c) Calcul du dénivelé positif (D+) ---
-  // Principe : on parcourt les points un par un, et on additionne
-  // uniquement les montées (différence d'altitude positive entre 2 points).
-  // On ignore les micro-variations < 0.5 m pour éviter le "bruit" du capteur.
+  // Principe : on suit une "altitude de référence" qui avance au fil du
+  // parcours, et on additionne l'écart chaque fois qu'il DÉPASSE le seuil
+  // de bruit — que cet écart se soit construit d'un coup ou petit à petit
+  // sur plusieurs points.
+  //
+  // Pourquoi pas comparer juste 2 points consécutifs (ancienne méthode) ?
+  // Parce que sur une montée douce et régulière (ex. une côte de ville),
+  // l'écart D'UN POINT À L'AUTRE peut rester en dessous de 0.5 m à chaque
+  // fois, alors que l'écart cumulé sur toute la montée est important. En
+  // comparant toujours au dernier point "confirmé" plutôt qu'au point
+  // juste précédent, on capture bien ces montées progressives tout en
+  // continuant à filtrer le bruit du capteur (petites oscillations qui ne
+  // dépassent jamais le seuil).
   let deniveleDPlus = 0;
   const SEUIL_BRUIT = 0.5; // en mètres
 
-  for (let i = 1; i < points.length; i++) {
-    const altitudePrecedente = points[i - 1].altitude;
+  let altitudeReference = null; // dernière altitude "confirmée" (référence courante)
+
+  for (let i = 0; i < points.length; i++) {
     const altitudeActuelle = points[i].altitude;
-    if (altitudePrecedente !== null && altitudeActuelle !== null) {
-      const difference = altitudeActuelle - altitudePrecedente;
-      if (difference > SEUIL_BRUIT) {
-        deniveleDPlus += difference;
-      }
+    if (altitudeActuelle === null) continue; // point sans altitude : on l'ignore
+
+    if (altitudeReference === null) {
+      // Premier point avec une altitude connue : il amorce la référence.
+      altitudeReference = altitudeActuelle;
+      continue;
     }
+
+    const difference = altitudeActuelle - altitudeReference;
+
+    if (difference > SEUIL_BRUIT) {
+      // Montée confirmée (dépasse le seuil) : on l'ajoute au total, puis on
+      // avance la référence jusqu'ici pour pouvoir capter la suite de la
+      // montée, même si elle continue par petits pas < 0.5 m.
+      deniveleDPlus += difference;
+      altitudeReference = altitudeActuelle;
+    } else if (difference < -SEUIL_BRUIT) {
+      // Vraie descente (dépasse le seuil dans l'autre sens) : on redémarre
+      // la référence ici, pour ne pas fausser le calcul de la prochaine
+      // montée avec une redescente qu'on aurait ignorée.
+      altitudeReference = altitudeActuelle;
+    }
+    // Sinon (écart entre -0.5 m et +0.5 m) : c'est probablement du bruit de
+    // capteur, on ne touche pas à la référence et on continue d'accumuler
+    // l'écart au fil des points suivants.
   }
 
   // --- d) Calcul de l'allure moyenne (min/km) ---
