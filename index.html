@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Mon Suivi Sportif</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Firebase (compat) : SDK "à l'ancienne", en <script> globaux classiques
+         (firebase.auth(), firebase.firestore()...) plutôt que la version
+         "modules" (import/export) — plus simple à lire et cohérent avec le
+         reste du site, qui n'utilise pas de système de build. -->
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+
+  <h1>🏃 Mon Suivi Sportif</h1>
+
+  <!-- ============================================================
+       ÉCRAN DE CONNEXION
+       Affiché tant que personne n'est authentifié (voir firebase-config.js
+       et la section "AUTHENTIFICATION" de script.js). Le reste du site
+       (#app-principal) reste caché en attendant — pas de données sans
+       connexion, puisque tout vit maintenant dans Firestore et pas dans le
+       navigateur.
+       ============================================================ -->
+  <section id="ecran-connexion">
+    <h2>🔒 Connexion</h2>
+    <p class="description">Cet outil est personnel : connecte-toi avec le compte créé dans la console Firebase (voir firebase-config.js) pour accéder à tes données, où que tu sois.</p>
+    <div class="reglages-grid">
+      <label for="connexion-email">Email
+        <input type="email" id="connexion-email" autocomplete="username">
+      </label>
+      <label for="connexion-mdp">Mot de passe
+        <input type="password" id="connexion-mdp" autocomplete="current-password">
+      </label>
+    </div>
+    <button id="btn-connexion" class="bouton-secondaire">Se connecter</button>
+    <p id="connexion-erreur" class="message-erreur" style="display:none;"></p>
+  </section>
+
+  <!-- Tout le reste du site : cachée tant qu'on n'est pas connecté (voir
+       démarrerApp() dans script.js, qui bascule ce display à 'block'). -->
+  <div id="app-principal" style="display:none;">
+
+  <!-- ============================================================
+       NAVIGATION PAR ONGLETS
+       Ce n'est PAS un vrai routeur (pas d'URL différente par page,
+       pas d'historique de navigation) : c'est juste 3 blocs <section
+       class="page"> dans le même index.html, et le JS affiche l'un
+       et cache les deux autres. Simple à comprendre, pas besoin de
+       framework pour un site à 3 pages.
+       ============================================================ -->
+  <nav id="nav-principale">
+    <button class="nav-onglet actif" data-page="accueil">🏠 Accueil</button>
+    <button class="nav-onglet" data-page="activite">📋 Activité</button>
+    <button class="nav-onglet" data-page="parametres">⚙️ Paramètres</button>
+  </nav>
+
+  <!-- ============================================================
+       PAGE ACCUEIL : import, dernière activité, aperçu semaine/mois
+       ============================================================ -->
+  <section id="page-accueil" class="page">
+
+    <!-- Aperçu semaine/mois : courbes cumulatives des métriques choisies.
+         C'est la SEULE chose affichée sur l'Accueil : l'import et le
+         détail de la dernière activité vivent maintenant dans l'onglet
+         Activité (voir plus bas), pour que l'Accueil reste un vrai
+         tableau de bord de suivi plutôt qu'un écran d'import. -->
+    <section id="apercu">
+      <h2>📊 Aperçu</h2>
+      <div class="apercu-controles">
+        <div class="apercu-periode">
+          <button id="btn-periode-semaine" class="bouton-periode actif" data-periode="semaine">Semaine</button>
+          <button id="btn-periode-mois" class="bouton-periode" data-periode="mois">Mois</button>
+        </div>
+        <!-- Navigation entre périodes : permet de consulter n'importe
+             quelle semaine/mois passé(e), pas seulement la période en
+             cours. Le bouton "suivant" est désactivé une fois revenu à
+             la période en cours (pas de données futures à afficher). -->
+        <div class="apercu-navigation">
+          <button id="btn-periode-precedente" class="bouton-nav-periode" title="Période précédente">‹</button>
+          <span id="apercu-periode-label" class="apercu-periode-label"></span>
+          <button id="btn-periode-suivante" class="bouton-nav-periode" title="Période suivante">›</button>
+          <button id="btn-periode-aujourdhui" class="bouton-secondaire" style="display:none;">Aujourd'hui</button>
+        </div>
+        <div class="apercu-metriques">
+          <label><input type="checkbox" id="metrique-distance" checked> Distance cumulée</label>
+          <label><input type="checkbox" id="metrique-charge" checked> Charge cumulée</label>
+          <label><input type="checkbox" id="metrique-rpe"> RPE cumulé</label>
+          <label><input type="checkbox" id="metrique-denivele"> D+ cumulé</label>
+        </div>
+      </div>
+      <canvas id="chartApercu"></canvas>
+    </section>
+
+    <!-- Petit récap chiffré : semaine précédente vs semaine en cours (pas
+         cumulatif comme le graphique ci-dessus, juste les totaux de chaque
+         semaine, pour un coup d'œil rapide). Indépendant de la navigation
+         du graphique d'aperçu : compare toujours LA semaine en cours à LA
+         précédente, quelle que soit la période affichée au-dessus. -->
+    <section id="recap-semaines">
+      <h2>📅 Semaine précédente vs semaine en cours</h2>
+      <table id="tableau-recap-semaines" class="tableau-recap">
+        <thead><tr><th>Indicateur</th><th>Semaine précédente</th><th>Semaine en cours</th></tr></thead>
+        <tbody id="corps-tableau-recap-semaines"></tbody>
+      </table>
+    </section>
+
+    <!-- ACWR (Acute:Chronic Workload Ratio) : compare la charge d'entraînement
+         récente (7 derniers jours) à la charge "habituelle" (moyenne des 4
+         dernières semaines). Nécessite FC repos/FC max réglées (la charge
+         TRIMP en dépend) et au moins 28 jours d'historique (voir message
+         affiché sinon, calculerSeriesACWR dans script.js). -->
+    <section id="acwr">
+      <h2>⚖️ Charge aiguë / chronique (ACWR)</h2>
+      <p class="description">Compare ta charge d'entraînement des 7 derniers jours ("aiguë") à ta charge moyenne des 4 dernières semaines ("chronique"). La zone grisée (0,8 à 1,3) correspond généralement à une progression maîtrisée ; au-delà de 1,5, le risque de blessure par surcharge augmente sensiblement (littérature en sciences du sport, ex. Gabbett 2016 — à prendre comme repère indicatif, pas comme un diagnostic).</p>
+      <canvas id="chartACWR"></canvas>
+      <p id="acwr-message" class="message-neutre" style="display:none;"></p>
+    </section>
+
+  </section>
+
+  <!-- ============================================================
+       PAGE ACTIVITÉ : import, dernière activité importée, tableau de
+       toutes les activités + détail
+       ============================================================ -->
+  <section id="page-activite" class="page" style="display:none;">
+
+    <!-- Zone d'import : un input file caché derrière un bouton stylé.
+         "multiple" permet de sélectionner plusieurs fichiers .tcx d'un coup
+         (import-message affiche un petit récap une fois tous les fichiers
+         traités — voir importerFichiersEnSequence dans script.js). -->
+    <section id="import-zone">
+      <label for="fichier-tcx" class="bouton-import">📂 Importer une ou plusieurs activités (.tcx)</label>
+      <input type="file" id="fichier-tcx" accept=".tcx" multiple style="display:none;">
+      <p id="import-message" class="message-info" style="display:none;"></p>
+    </section>
+
+    <!-- Zone où on affiche les stats de la dernière activité (import
+         tout juste effectué, OU dernière activité déjà enregistrée si
+         on revient sur la page sans rien importer de nouveau) -->
+    <section id="resultat" style="display:none;">
+      <h2>Dernière activité importée</h2>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">Durée</span>
+          <span class="stat-value" id="stat-duree">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Distance</span>
+          <span class="stat-value" id="stat-distance">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Allure moyenne</span>
+          <span class="stat-value" id="stat-allure">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">VAP moyenne</span>
+          <span class="stat-value" id="stat-vap">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">FC moyenne</span>
+          <span class="stat-value" id="stat-fc">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Dénivelé positif (D+)</span>
+          <span class="stat-value" id="stat-denivele">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Calories</span>
+          <span class="stat-value" id="stat-calories">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Charge (TRIMP)</span>
+          <span class="stat-value" id="stat-charge">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Zone d'entraînement</span>
+          <span class="stat-value" id="stat-zone">--</span>
+        </div>
+      </div>
+
+      <!-- Saisie du ressenti (RPE) juste après l'import : c'est le moment
+           où on s'en souvient le mieux ! Modifiable plus tard depuis le
+           détail de l'activité un peu plus bas dans ce même onglet. -->
+      <div class="rpe-zone">
+        <label for="rpe-select">Ressenti (RPE) de cette séance : </label>
+        <select id="rpe-select">
+          <option value="">-- non renseigné --</option>
+          <option value="1">1 - Très facile</option>
+          <option value="2">2</option>
+          <option value="3">3 - Facile</option>
+          <option value="4">4</option>
+          <option value="5">5 - Modéré</option>
+          <option value="6">6</option>
+          <option value="7">7 - Difficile</option>
+          <option value="8">8</option>
+          <option value="9">9</option>
+          <option value="10">10 - Maximal</option>
+        </select>
+        <button id="btn-valider-rpe" class="bouton-secondaire">Enregistrer le ressenti</button>
+      </div>
+    </section>
+
+    <section id="historique">
+      <h2>Activités enregistrées</h2>
+      <!-- Les <th> ci-dessous sont cliquables (voir trierActivites() dans
+           script.js) pour trier le tableau selon la colonne choisie ;
+           re-cliquer sur la même colonne inverse l'ordre. data-colonne fait
+           le lien avec les comparateurs définis dans COMPARATEURS_TRI. -->
+      <table id="tableau-activites">
+        <thead>
+          <tr>
+            <th data-colonne="date">Date <span class="fleche-tri"></span></th>
+            <th data-colonne="sport">Sport <span class="fleche-tri"></span></th>
+            <th data-colonne="distance">Distance <span class="fleche-tri"></span></th>
+            <th data-colonne="duree">Durée <span class="fleche-tri"></span></th>
+            <th data-colonne="allure">Allure <span class="fleche-tri"></span></th>
+            <th data-colonne="fc">FC moy. <span class="fleche-tri"></span></th>
+            <th data-colonne="charge">Charge <span class="fleche-tri"></span></th>
+            <th data-colonne="rpe">RPE <span class="fleche-tri"></span></th>
+          </tr>
+        </thead>
+        <tbody id="corps-tableau-activites">
+          <!-- Rempli par JavaScript -->
+        </tbody>
+      </table>
+      <div id="detail-activite" style="display:none; margin-top: 20px; padding: 20px; border: 1px solid #ccc; border-radius: 8px;">
+        <h2 id="detail-titre"></h2>
+        <p><strong>Date :</strong> <span id="detail-date"></span></p>
+        <p><strong>Sport :</strong> <span id="detail-sport"></span></p>
+        <p><strong>Distance :</strong> <span id="detail-distance"></span></p>
+        <p><strong>Durée :</strong> <span id="detail-duree"></span></p>
+        <p><strong>Allure :</strong> <span id="detail-allure"></span></p>
+        <p><strong>VAP moyenne :</strong> <span id="detail-vap"></span></p>
+        <p><strong>FC moyenne :</strong> <span id="detail-fc"></span></p>
+        <p><strong>Dénivelé D+ :</strong> <span id="detail-denivele"></span></p>
+        <p><strong>Calories :</strong> <span id="detail-calories"></span></p>
+        <p><strong>Charge (TRIMP) :</strong> <span id="detail-charge"></span></p>
+        <p><strong>Zone d'entraînement :</strong> <span id="detail-zone"></span></p>
+
+        <!-- Tableau des "tours" (laps) : un tour = un appui sur le bouton
+             "tour" de la montre pendant l'activité. N'est affiché que s'il y
+             a VRAIMENT plusieurs tours (voir afficherTableauLaps) — avec un
+             seul tour, ce tableau ne dirait rien de plus que les stats
+             globales ci-dessus. -->
+        <div id="detail-laps-zone" style="margin-top: 20px; display:none;">
+          <h3>Tours (laps)</h3>
+          <table id="tableau-laps" class="tableau-recap">
+            <thead>
+              <tr><th>Tour</th><th>Distance</th><th>Durée</th><th>Allure</th><th>FC moy.</th></tr>
+            </thead>
+            <tbody id="corps-tableau-laps"></tbody>
+          </table>
+        </div>
+
+        <div class="rpe-zone">
+          <label for="detail-rpe-select"><strong>Ressenti (RPE) :</strong></label>
+          <select id="detail-rpe-select">
+            <option value="">-- non renseigné --</option>
+            <option value="1">1 - Très facile</option>
+            <option value="2">2</option>
+            <option value="3">3 - Facile</option>
+            <option value="4">4</option>
+            <option value="5">5 - Modéré</option>
+            <option value="6">6</option>
+            <option value="7">7 - Difficile</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10 - Maximal</option>
+          </select>
+          <button id="btn-valider-detail-rpe" class="bouton-secondaire">Enregistrer le ressenti</button>
+        </div>
+        <div id="carte" style="height: 400px; margin-top: 15px; border-radius: 8px;"></div>
+
+        <div style="margin-top: 30px;">
+          <h3>Altitude en fonction de la distance</h3>
+          <canvas id="chartDenivele"></canvas>
+        </div>
+
+        <div style="margin-top: 30px;">
+          <div style="margin-top: 30px; margin-bottom: 15px;">
+            <label for="selectAllure">Affichage allure : </label>
+            <select id="selectAllure">
+              <option value="instantanee">Allure instantanée</option>
+              <option value="barreParKm">Allure par km (barres)</option>
+            </select>
+          </div>
+          <h3>Allure au fil du temps</h3>
+          <canvas id="chartAllure"></canvas>
+        </div>
+
+        <div style="margin-top: 30px;">
+          <h3>Fréquence cardiaque au fil du temps</h3>
+          <canvas id="chartFC"></canvas>
+        </div>
+
+        <!-- Suppression définitive de l'activité (avec confirmation avant
+             d'agir, voir le handler du bouton dans script.js). Placé tout en
+             bas et à part pour limiter le risque de clic accidentel. -->
+        <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; text-align: right;">
+          <button id="btn-supprimer-activite" class="bouton-danger">🗑️ Supprimer cette activité</button>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <!-- ============================================================
+       PAGE PARAMÈTRES : FC repos / FC max, nécessaires pour calculer
+       la "charge d'entraînement" (TRIMP) de chaque activité. Sans ces
+       valeurs, on ne peut pas savoir à quel point une FC moyenne
+       donnée représente un effort intense pour TOI en particulier.
+       Sauvegardé dans le localStorage du navigateur (persiste d'une
+       visite à l'autre, mais reste propre à cet ordinateur/navigateur).
+       ============================================================ -->
+  <section id="page-parametres" class="page" style="display:none;">
+
+    <!-- ============================================================
+         COMPTE : rappel de l'adresse connectée + déconnexion. Utile surtout
+         sur un appareil partagé, ou pour vérifier qu'on est bien connecté
+         au bon compte (un seul compte normalement, voir firebase-config.js).
+         ============================================================ -->
+    <section id="compte">
+      <h2>👤 Compte</h2>
+      <p>Connecté en tant que : <strong id="compte-email">--</strong></p>
+      <button id="btn-deconnexion" class="bouton-secondaire">Se déconnecter</button>
+    </section>
+
+    <section id="reglages">
+      <h2>⚙️ Réglages</h2>
+      <div class="reglages-grid">
+        <label for="reglage-fc-repos">FC repos (bpm)
+          <input type="number" id="reglage-fc-repos" min="30" max="120" placeholder="ex : 55">
+        </label>
+        <label for="reglage-fc-max">FC max (bpm)
+          <input type="number" id="reglage-fc-max" min="120" max="230" placeholder="ex : 190">
+        </label>
+        <label for="reglage-courbe-trimp">Courbe TRIMP
+          <select id="reglage-courbe-trimp">
+            <option value="homme">Type "homme" (coefficients par défaut)</option>
+            <option value="femme">Type "femme"</option>
+          </select>
+        </label>
+      </div>
+      <button id="btn-enregistrer-reglages" class="bouton-secondaire">Enregistrer les réglages</button>
+      <p id="reglages-message" class="message-info" style="display:none;"></p>
+    </section>
+
+    <!-- ============================================================
+         TEST VO2MAX : résultats d'un test physiologique en laboratoire
+         (facultatif). Le VO2max est gardé pour référence. Les "zones
+         d'entraînement" sont ce qu'on peut réellement exploiter tout de
+         suite : elles servent à classer chaque activité (via sa FC
+         moyenne) dans une zone d'intensité personnalisée, bien plus
+         précise que des zones génériques calculées à partir de % de FC max.
+         Le sommet de la zone 5 = ta FC max, déjà réglée ci-dessus (pas
+         besoin de la redemander).
+         ============================================================ -->
+    <section id="test-vo2max">
+      <h2>🫁 Test VO2max</h2>
+      <p class="description">Renseigne les résultats de ton dernier test physiologique en laboratoire (facultatif) : ça permet d'afficher, pour chaque activité, dans quelle zone d'entraînement elle se situe.</p>
+
+      <div class="reglages-grid">
+        <label for="vo2max-valeur">VO2max (ml/kg/min)
+          <input type="number" id="vo2max-valeur" min="20" max="100" step="0.1" placeholder="ex : 64">
+        </label>
+        <label for="vo2max-date">Date du test
+          <input type="date" id="vo2max-date">
+        </label>
+      </div>
+
+      <h3>Zones d'entraînement (fréquence cardiaque)</h3>
+      <p class="description">Limite haute de chaque zone, en bpm (la zone suivante commence là où la précédente s'arrête). La zone 5 va jusqu'à ta FC max réglée ci-dessus.</p>
+      <div class="reglages-grid">
+        <label for="zone-limite-1">Fin Z1 - Récupération
+          <input type="number" id="zone-limite-1" min="60" max="230" placeholder="ex : 141">
+        </label>
+        <label for="zone-limite-2">Fin Z2 - Endurance
+          <input type="number" id="zone-limite-2" min="60" max="230" placeholder="ex : 155">
+        </label>
+        <label for="zone-limite-3">Fin Z3 - Tempo
+          <input type="number" id="zone-limite-3" min="60" max="230" placeholder="ex : 172">
+        </label>
+        <label for="zone-limite-4">Fin Z4 - Seuil
+          <input type="number" id="zone-limite-4" min="60" max="230" placeholder="ex : 179">
+        </label>
+      </div>
+
+      <button id="btn-enregistrer-vo2max" class="bouton-secondaire">Enregistrer</button>
+      <p id="vo2max-message" class="message-info" style="display:none;"></p>
+
+      <table id="tableau-zones-recap" class="tableau-recap" style="display:none;">
+        <thead><tr><th>Zone</th><th>FC min</th><th>FC max</th></tr></thead>
+        <tbody id="corps-tableau-zones-recap"></tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================
+         MIGRATION DES ANCIENNES DONNÉES LOCALES (IndexedDB/localStorage)
+         À utiliser UNE SEULE FOIS, sur l'appareil/navigateur qui contenait
+         déjà des activités AVANT le passage à Firestore : ça les recopie
+         dans le cloud, sous ce compte, sans rien supprimer localement.
+         Sans risque à relancer plusieurs fois (une activité déjà migrée
+         est simplement réécrite à l'identique, voir migrerDonneesLocales
+         dans script.js).
+         ============================================================ -->
+    <section id="migration">
+      <h2>⬆️ Migration des anciennes données locales</h2>
+      <p class="description">Si cet appareil/navigateur contenait déjà des activités enregistrées AVANT le passage à ce compte en ligne, ce bouton les recopie vers ton compte (sans rien supprimer ni modifier localement). Inutile de le refaire sur tes autres appareils.</p>
+      <button id="btn-migrer-donnees" class="bouton-secondaire">Importer mes anciennes données locales</button>
+      <p id="migration-message" class="message-info" style="display:none;"></p>
+    </section>
+  </section>
+
+  </div> <!-- fin #app-principal -->
+
+  <!-- La config Firebase (propre à CHAQUE déploiement, voir le fichier pour
+       les instructions) doit être chargée avant script.js, qui l'utilise
+       dès son démarrage. -->
+  <script src="firebase-config.js"></script>
+
+  <!-- On charge notre script JS à la fin, une fois le HTML chargé -->
+  <script src="script.js"></script>
+</body>
+</html>
