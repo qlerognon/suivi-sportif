@@ -356,6 +356,58 @@
       </table>
     </section>
 
+    <!-- ============================================================
+         SEGMENTS (façon Strava) : une portion de parcours définie par
+         l'utilisateur à partir d'une activité déjà enregistrée (deux
+         curseurs sur le tracé), dont l'outil recherche ensuite le passage
+         (même sens uniquement) dans TOUTES les activités du même sport,
+         passées ET futures. Voir la section "SEGMENTS" dans script.js pour
+         le détail de l'algorithme de détection (approximatif : tolérance
+         GPS de 40 m, pas un vrai map-matching).
+         ============================================================ -->
+    <section id="segments">
+      <h2>🎯 Segments</h2>
+      <p class="description">Définis une portion de parcours (un "segment", à la Strava) à partir d'une activité déjà importée : l'outil recherche ensuite automatiquement, dans toutes tes activités du même sport (passées ET futures), les fois où tu as emprunté ce même tracé <strong>dans le même sens</strong>, et classe tes temps du plus rapide au plus lent. Détection approximative (tolérance GPS ~40 m) : peut occasionnellement rater un passage ou en détecter un par erreur sur un tracé très proche.</p>
+
+      <details id="segment-nouveau">
+        <summary>➕ Définir un nouveau segment</summary>
+
+        <div class="reglages-grid">
+          <label for="segment-activite-source">Activité source (avec tracé GPS)
+            <select id="segment-activite-source">
+              <option value="">-- choisir une activité --</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="segment-definition-zone" style="display:none;">
+          <p class="description">Déplace les deux curseurs pour choisir le début et la fin du segment sur le tracé (mis en évidence en rouge sur la carte, le reste du tracé en bleu).</p>
+          <div id="carte-segment" style="height: 300px; border-radius: 8px;"></div>
+
+          <div class="segment-sliders">
+            <label for="segment-slider-debut">Début
+              <input type="range" id="segment-slider-debut" min="0" max="0" value="0">
+            </label>
+            <label for="segment-slider-fin">Fin
+              <input type="range" id="segment-slider-fin" min="0" max="0" value="0">
+            </label>
+          </div>
+          <p>Distance du segment : <strong id="segment-distance-apercu">--</strong></p>
+
+          <div class="reglages-grid">
+            <label for="segment-nom">Nom du segment
+              <input type="text" id="segment-nom" placeholder="ex : Côte de la Forêt">
+            </label>
+          </div>
+          <button id="btn-creer-segment" class="bouton-secondaire">Créer le segment</button>
+          <p id="segment-definition-message" class="message-info" style="display:none;"></p>
+        </div>
+      </details>
+
+      <div id="zone-segments"></div>
+      <p id="segments-message" class="message-neutre" style="display:none;">Définis un premier segment ci-dessus pour voir apparaître tes temps ici.</p>
+    </section>
+
   </section>
 
   <!-- ============================================================
