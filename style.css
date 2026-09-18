@@ -250,10 +250,23 @@ h1 {
   gap: 10px;
 }
 
-.rpe-zone select {
+.rpe-zone select,
+.rpe-zone input[type="text"] {
   padding: 6px 8px;
   border: 1px solid #ccc;
   border-radius: 5px;
+}
+
+.rpe-zone input[type="text"] {
+  flex: 1 1 220px; /* s'étire pour remplir l'espace dispo, mais reste lisible même étroit */
+  min-width: 160px;
+}
+
+/* Texte discret (ex. "Sans nom" dans le tableau d'activités) pour une
+   valeur non renseignée, sans attirer l'œil autant qu'une vraie donnée. */
+.texte-attenue {
+  color: #999;
+  font-style: italic;
 }
 
 /* --- Aperçu semaine/mois (page Accueil) --- */
