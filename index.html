@@ -186,6 +186,18 @@
         </div>
       </div>
 
+      <!-- Nom donné à l'activité, pour s'y retrouver plus facilement dans le
+           tableau qu'avec la seule date. Comme le RPE juste en dessous,
+           jamais rempli automatiquement (un .tcx n'a pas de titre) :
+           saisissable ici juste après l'import, et modifiable plus tard
+           depuis le détail de l'activité. -->
+      <div class="rpe-zone">
+        <label for="nom-input">Nom de cette activité : </label>
+        <input type="text" id="nom-input" placeholder="ex : Sortie longue, Fractionné au parc">
+        <button id="btn-valider-nom" class="bouton-secondaire">Enregistrer le nom</button>
+        <p id="nom-message" class="message-info" style="display:none;"></p>
+      </div>
+
       <!-- Saisie du ressenti (RPE) juste après l'import : c'est le moment
            où on s'en souvient le mieux ! Modifiable plus tard depuis le
            détail de l'activité un peu plus bas dans ce même onglet. -->
@@ -218,6 +230,7 @@
         <thead>
           <tr>
             <th data-colonne="date">Date <span class="fleche-tri"></span></th>
+            <th data-colonne="nom">Nom <span class="fleche-tri"></span></th>
             <th data-colonne="sport">Sport <span class="fleche-tri"></span></th>
             <th data-colonne="distance">Distance <span class="fleche-tri"></span></th>
             <th data-colonne="duree">Durée <span class="fleche-tri"></span></th>
@@ -233,6 +246,17 @@
       </table>
       <div id="detail-activite" style="display:none; margin-top: 20px; padding: 20px; border: 1px solid #ccc; border-radius: 8px;">
         <h2 id="detail-titre"></h2>
+
+        <!-- Nom de l'activité, modifiable à tout moment (voir aussi la
+             saisie identique juste après l'import, plus haut sur cette
+             page). Change aussi le titre ci-dessus une fois enregistré. -->
+        <div class="rpe-zone">
+          <label for="detail-nom-input"><strong>Nom :</strong></label>
+          <input type="text" id="detail-nom-input" placeholder="ex : Sortie longue, Fractionné au parc">
+          <button id="btn-valider-detail-nom" class="bouton-secondaire">Enregistrer le nom</button>
+          <p id="detail-nom-message" class="message-info" style="display:none;"></p>
+        </div>
+
         <p><strong>Date :</strong> <span id="detail-date"></span></p>
         <p><strong>Sport :</strong> <span id="detail-sport"></span></p>
         <p><strong>Distance :</strong> <span id="detail-distance"></span></p>
