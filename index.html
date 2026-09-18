@@ -2,6 +2,14 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <!-- Sans cette balise, un navigateur mobile affiche la page comme si
+       l'écran faisait ~980px de large puis la réduit (zoom arrière) au lieu
+       de l'adapter à la vraie largeur de l'écran : tout paraît minuscule et
+       il faut zoomer pour lire quoi que ce soit. Avec elle, la page utilise
+       la largeur RÉELLE de l'appareil dès le départ, ce qui est le
+       préalable indispensable à toute adaptation mobile (voir les règles
+       "@media" dans style.css pour la suite de l'adaptation). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mon Suivi Sportif</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -106,10 +114,12 @@
          précédente, quelle que soit la période affichée au-dessus. -->
     <section id="recap-semaines">
       <h2>📅 Semaine précédente vs semaine en cours</h2>
+      <div class="tableau-scroll">
       <table id="tableau-recap-semaines" class="tableau-recap">
         <thead><tr><th>Indicateur</th><th>Semaine précédente</th><th>Semaine en cours</th></tr></thead>
         <tbody id="corps-tableau-recap-semaines"></tbody>
       </table>
+      </div>
     </section>
 
     <!-- ACWR (Acute:Chronic Workload Ratio) : compare la charge d'entraînement
@@ -226,6 +236,10 @@
            script.js) pour trier le tableau selon la colonne choisie ;
            re-cliquer sur la même colonne inverse l'ordre. data-colonne fait
            le lien avec les comparateurs définis dans COMPARATEURS_TRI. -->
+      <!-- .tableau-scroll (voir style.css) : permet au tableau de défiler
+           horizontalement sur petit écran plutôt que d'écraser ses 9
+           colonnes jusqu'à les rendre illisibles. -->
+      <div class="tableau-scroll">
       <table id="tableau-activites">
         <thead>
           <tr>
@@ -244,6 +258,7 @@
           <!-- Rempli par JavaScript -->
         </tbody>
       </table>
+      </div>
       <div id="detail-activite" style="display:none; margin-top: 20px; padding: 20px; border: 1px solid #ccc; border-radius: 8px;">
         <h2 id="detail-titre"></h2>
 
@@ -276,12 +291,14 @@
              globales ci-dessus. -->
         <div id="detail-laps-zone" style="margin-top: 20px; display:none;">
           <h3>Tours (laps)</h3>
+          <div class="tableau-scroll">
           <table id="tableau-laps" class="tableau-recap">
             <thead>
               <tr><th>Tour</th><th>Distance</th><th>Durée</th><th>Allure</th><th>FC moy.</th></tr>
             </thead>
             <tbody id="corps-tableau-laps"></tbody>
           </table>
+          </div>
         </div>
 
         <div class="rpe-zone">
@@ -374,10 +391,12 @@
       <button id="btn-ajouter-record" class="bouton-secondaire">Ajouter le record</button>
       <p id="records-manuels-message" class="message-info" style="display:none;"></p>
 
+      <div class="tableau-scroll">
       <table id="tableau-records-manuels" class="tableau-recap">
         <thead><tr><th>Nom</th><th>Valeur</th><th>Date</th><th>Activité</th><th></th></tr></thead>
         <tbody id="corps-tableau-records-manuels"></tbody>
       </table>
+      </div>
     </section>
 
     <!-- ============================================================
@@ -518,10 +537,12 @@
       <button id="btn-enregistrer-vo2max" class="bouton-secondaire">Enregistrer</button>
       <p id="vo2max-message" class="message-info" style="display:none;"></p>
 
+      <div class="tableau-scroll">
       <table id="tableau-zones-recap" class="tableau-recap" style="display:none;">
         <thead><tr><th>Zone</th><th>FC min</th><th>FC max</th></tr></thead>
         <tbody id="corps-tableau-zones-recap"></tbody>
       </table>
+      </div>
     </section>
 
     <!-- ============================================================
