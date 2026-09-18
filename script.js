@@ -37,12 +37,14 @@ db.enablePersistence().catch(erreur => {
   console.warn('Persistance hors-ligne non activée :', erreur.code);
 });
 
-// Fonctions "annulation" des écouteurs Firestore (activités/réglages/VO2max) :
-// utiles pour tout arrêter proprement à la déconnexion, avant qu'un nouveau
-// compte (ou une reconnexion) ne redémarre des écouteurs par-dessus.
+// Fonctions "annulation" des écouteurs Firestore (activités/réglages/VO2max/
+// records) : utiles pour tout arrêter proprement à la déconnexion, avant
+// qu'un nouveau compte (ou une reconnexion) ne redémarre des écouteurs
+// par-dessus.
 let arreterEcouteActivites = null;
 let arreterEcouteReglages = null;
 let arreterEcouteVO2max = null;
+let arreterEcouteRecords = null;
 
 auth.onAuthStateChanged(function (user) {
   if (user) {
@@ -54,14 +56,17 @@ auth.onAuthStateChanged(function (user) {
     arreterEcouteActivites = demarrerEcouteActivites(uidActuel);
     arreterEcouteReglages = demarrerEcouteReglages(uidActuel);
     arreterEcouteVO2max = demarrerEcouteVO2max(uidActuel);
+    arreterEcouteRecords = demarrerEcouteRecords(uidActuel);
   } else {
     // Déconnecté (ou pas encore connecté) : on coupe les écouteurs en cours
     // s'il y en avait, on vide l'état local, et on affiche l'écran de connexion.
     if (arreterEcouteActivites) arreterEcouteActivites();
     if (arreterEcouteReglages) arreterEcouteReglages();
     if (arreterEcouteVO2max) arreterEcouteVO2max();
+    if (arreterEcouteRecords) arreterEcouteRecords();
     uidActuel = null;
     activitesEnMemoire = [];
+    recordsManuelsEnMemoire = [];
 
     document.getElementById('app-principal').style.display = 'none';
     document.getElementById('ecran-connexion').style.display = 'block';
@@ -1531,6 +1536,18 @@ function formatDate(dateISO) {
   return `${jour}/${mois}/${annee} ${heures}:${minutes}`;
 }
 
+// Même chose que formatDate() ci-dessus, mais SANS l'heure (ex: "10/09/2026"
+// au lieu de "10/09/2026 00:00") : utilisé pour la date d'un record manuel,
+// qui vient d'un simple <input type="date"> et n'a donc pas d'heure
+// signifiante (contrairement à la date/heure d'une activité importée).
+function formatDateSeule(dateISO) {
+  const dateObj = new Date(dateISO);
+  const jour = dateObj.getDate().toString().padStart(2, '0');
+  const mois = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+  const annee = dateObj.getFullYear();
+  return `${jour}/${mois}/${annee}`;
+}
+
 // ============================================================
 // ACTIVITÉS (Firestore)
 // Chaque activité est un document séparé dans users/{uid}/activites/{id}
@@ -1577,6 +1594,8 @@ function rafraichirAffichageActivites() {
   afficherApercu();
   afficherRecapSemaines();
   afficherGraphiqueACWR();
+  afficherRecordsAutomatiques();
+  remplirSelectActiviteLiee();
 }
 
 // --- Sauvegarde d'une activité dans Firestore ---
@@ -2057,5 +2076,324 @@ function terminerMigrationLocale(anciennesActivites, zoneMessage) {
       zoneMessage.textContent = '❌ Erreur pendant la migration des activités (voir la console).';
     });
 }
+
+// ============================================================
+// RECORDS PERSONNELS
+// Deux volets, dans l'onglet "🏆 Records" :
+//
+// 1) Records AUTOMATIQUES : calculés à partir des activités déjà
+//    importées, pour un jeu de distances standards (1 km, 5 km, 10 km,
+//    semi, marathon), regroupés PAR SPORT (comparer un temps de course à
+//    pied à un temps de vélo n'aurait pas de sens). Pour chaque distance,
+//    on cherche la MEILLEURE portion (pas forcément l'activité entière) à
+//    l'intérieur de chaque activité, via une fenêtre glissante sur la
+//    distance cumulée des points GPS/capteur (voir meilleurTempsPourDistance
+//    ci-dessous) — comme le fait Strava pour ses "records personnels".
+//
+// 2) Records MANUELS : saisis à la main, pour tout ce que le calcul
+//    automatique ne peut pas trouver (record antérieur à cet outil,
+//    distance non standard, etc.), avec un lien optionnel vers une
+//    activité déjà importée. Stockés dans Firestore
+//    (users/{uid}/records/{id}), exactement selon le même principe
+//    cache-en-mémoire + écouteur Firestore que réglages/VO2max/activités
+//    plus haut dans ce fichier.
+// ============================================================
+
+const DISTANCES_RECORDS = [
+  { cle: '1km', metres: 1000, libelle: '1 km' },
+  { cle: '5km', metres: 5000, libelle: '5 km' },
+  { cle: '10km', metres: 10000, libelle: '10 km' },
+  { cle: 'semi', metres: 21097, libelle: 'Semi-marathon (21,1 km)' },
+  { cle: 'marathon', metres: 42195, libelle: 'Marathon (42,2 km)' }
+];
+
+// Formate une durée en secondes façon "temps de course" (ex: "42:18" ou
+// "1:32:05"), plus adapté à un record que formatDuree() (qui écrit "1h
+// 23min 45s" en toutes lettres, pensé pour la durée totale d'une activité).
+function formatDureeRecord(secondes) {
+  const total = Math.round(secondes);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Cherche, À L'INTÉRIEUR d'une seule activité, le temps le plus rapide pour
+// couvrir EXACTEMENT `distanceCibleMetres`, n'importe où dans la trace (pas
+// forcément depuis le tout début). Principe (fenêtre glissante à 2
+// pointeurs, en s'appuyant sur le fait que la distance cumulée `p.distance`
+// ne peut qu'augmenter au fil des points) :
+//   - pour chaque point de départ i, on avance un pointeur j jusqu'à ce que
+//     la distance parcourue depuis i atteigne la cible ;
+//   - comme les points GPS sont espacés de plusieurs secondes, on interpole
+//     LINÉAIREMENT entre les deux points qui encadrent le moment exact où la
+//     distance cible est atteinte, pour un temps précis plutôt qu'arrondi au
+//     point GPS le plus proche ;
+//   - on garde le plus court de ces temps sur toute l'activité.
+// Renvoie une durée en secondes (arrondie), ou null si l'activité ne
+// contient pas assez de distance mesurée (pas de GPS/capteur de distance,
+// ou activité plus courte que la distance cible).
+function meilleurTempsPourDistance(activite, distanceCibleMetres) {
+  const pointsBruts = (activite.points || []).filter(p => p.distance !== null && p.distance !== undefined && p.time);
+  if (pointsBruts.length < 2) return null;
+
+  const points = ajouterTempsEcoule(pointsBruts);
+  if (points.length < 2) return null;
+
+  const distanceTotale = points[points.length - 1].distance - points[0].distance;
+  if (distanceTotale < distanceCibleMetres) return null;
+
+  let meilleurDuree = null;
+  let j = 0;
+
+  for (let i = 0; i < points.length; i++) {
+    if (j < i) j = i;
+    while (j < points.length - 1 && points[j].distance - points[i].distance < distanceCibleMetres) {
+      j++;
+    }
+    // Plus assez de distance restante depuis ce point de départ (et donc
+    // depuis tous les suivants aussi) : inutile de continuer plus loin.
+    if (points[j].distance - points[i].distance < distanceCibleMetres) break;
+
+    let tempsFin;
+    if (j === i) {
+      tempsFin = points[j].tempsEcouleSecondes;
+    } else {
+      const pointAvant = points[j - 1];
+      const pointApres = points[j];
+      const distanceManquante = (points[i].distance + distanceCibleMetres) - pointAvant.distance;
+      const distanceSegment = pointApres.distance - pointAvant.distance;
+      const fraction = distanceSegment > 0 ? distanceManquante / distanceSegment : 0;
+      tempsFin = pointAvant.tempsEcouleSecondes + fraction * (pointApres.tempsEcouleSecondes - pointAvant.tempsEcouleSecondes);
+    }
+
+    const duree = tempsFin - points[i].tempsEcouleSecondes;
+    if (duree > 0 && (meilleurDuree === null || duree < meilleurDuree)) {
+      meilleurDuree = duree;
+    }
+  }
+
+  return meilleurDuree !== null ? Math.round(meilleurDuree) : null;
+}
+
+// Parcourt TOUTES les activités connues et calcule, pour chaque sport et
+// chaque distance standard, le meilleur temps trouvé (et dans quelle
+// activité). Renvoie une Map : sport -> Map(cle distance -> { distanceInfo,
+// dureeSecondes, activite }).
+function calculerRecordsAutomatiques() {
+  const parSport = new Map();
+
+  activitesEnMemoire.forEach(activite => {
+    DISTANCES_RECORDS.forEach(distanceInfo => {
+      const duree = meilleurTempsPourDistance(activite, distanceInfo.metres);
+      if (duree === null) return;
+
+      if (!parSport.has(activite.sport)) parSport.set(activite.sport, new Map());
+      const recordsSport = parSport.get(activite.sport);
+      const recordActuel = recordsSport.get(distanceInfo.cle);
+      if (!recordActuel || duree < recordActuel.dureeSecondes) {
+        recordsSport.set(distanceInfo.cle, { distanceInfo, dureeSecondes: duree, activite });
+      }
+    });
+  });
+
+  return parSport;
+}
+
+// Ouvre le détail d'une activité à partir de son ID (pas de sa position dans
+// le tableau, qui dépend du tri actuel) : utilisé par les records
+// (automatiques et manuels liés) pour renvoyer vers l'activité concernée,
+// depuis l'onglet Records.
+function ouvrirActiviteParId(id) {
+  const index = activitesEnMemoire.findIndex(act => act.id === id);
+  if (index === -1) return;
+
+  afficherPage('activite');
+  // On repart d'un panneau de détail fermé, pour être sûr que
+  // afficherDetailActivite() (re)ouvre bien sur CETTE activité plutôt que de
+  // le refermer (son comportement si l'activité demandée était déjà celle
+  // affichée, voir plus haut).
+  document.getElementById('detail-activite').style.display = 'none';
+  activiteEnCoursAffichage = null;
+  afficherDetailActivite(index);
+}
+
+// Reconstruit l'affichage des records automatiques (un petit tableau par
+// sport). Appelée par rafraichirAffichageActivites() à chaque changement des
+// activités.
+function afficherRecordsAutomatiques() {
+  const zone = document.getElementById('zone-records-auto');
+  const message = document.getElementById('records-auto-message');
+  if (!zone || !message) return; // sécurité si la page n'est pas encore chargée
+
+  if (activitesEnMemoire.length === 0) {
+    zone.innerHTML = '';
+    message.style.display = 'block';
+    return;
+  }
+
+  const parSport = calculerRecordsAutomatiques();
+
+  if (parSport.size === 0) {
+    zone.innerHTML = '';
+    message.textContent = "Aucun record détecté pour l'instant : il faut au moins une activité couvrant entièrement une des distances standards (1 km, 5 km, 10 km, semi ou marathon).";
+    message.style.display = 'block';
+    return;
+  }
+
+  message.style.display = 'none';
+  zone.innerHTML = '';
+
+  [...parSport.keys()].sort().forEach(sport => {
+    const recordsSport = parSport.get(sport);
+
+    const bloc = document.createElement('div');
+    bloc.className = 'records-bloc-sport';
+
+    const titre = document.createElement('h3');
+    titre.textContent = sport;
+    bloc.appendChild(titre);
+
+    const tableau = document.createElement('table');
+    tableau.innerHTML = '<thead><tr><th>Distance</th><th>Meilleur temps</th><th>Allure</th><th>Date</th></tr></thead>';
+    const corps = document.createElement('tbody');
+
+    DISTANCES_RECORDS.forEach(distanceInfo => {
+      const record = recordsSport.get(distanceInfo.cle);
+      if (!record) return;
+
+      const allureMinParKm = (record.dureeSecondes / 60) / (distanceInfo.metres / 1000);
+      const ligne = document.createElement('tr');
+      ligne.style.cursor = 'pointer';
+      ligne.title = "Voir l'activité";
+      ligne.innerHTML = `
+        <td>${distanceInfo.libelle}</td>
+        <td>${formatDureeRecord(record.dureeSecondes)}</td>
+        <td>${formatAllure(allureMinParKm)} /km</td>
+        <td>${formatDate(record.activite.date)}</td>
+      `;
+      ligne.addEventListener('click', () => ouvrirActiviteParId(record.activite.id));
+      corps.appendChild(ligne);
+    });
+
+    tableau.appendChild(corps);
+    bloc.appendChild(tableau);
+    zone.appendChild(bloc);
+  });
+}
+
+// --- Records manuels (Firestore : users/{uid}/records/{id}) ---
+
+let recordsManuelsEnMemoire = [];
+
+// Écoute Firestore en continu (voir demarrerEcouteReglages plus haut pour le
+// même principe en détail). Renvoie une fonction pour arrêter l'écoute (à la
+// déconnexion).
+function demarrerEcouteRecords(uid) {
+  return db.collection('users').doc(uid).collection('records')
+    .onSnapshot(function (snapshot) {
+      recordsManuelsEnMemoire = snapshot.docs.map(doc => doc.data());
+      afficherRecordsManuels();
+    }, function (erreur) {
+      console.error('Erreur d\'écoute des records manuels :', erreur);
+    });
+}
+
+// Remplit le menu déroulant "Activité liée" du formulaire de saisie, la plus
+// récente en premier (pratique : le record qu'on vient de saisir correspond
+// souvent à l'activité qu'on vient d'importer). Appelée à chaque changement
+// des activités, pour rester à jour.
+function remplirSelectActiviteLiee() {
+  const select = document.getElementById('record-activite-liee');
+  if (!select) return;
+
+  const valeurActuelle = select.value;
+  const activitesTriees = [...activitesEnMemoire].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  select.innerHTML = '<option value="">(aucune)</option>' +
+    activitesTriees.map(act =>
+      `<option value="${act.id}">${formatDate(act.date)} — ${act.sport} (${(act.distanceMetres / 1000).toFixed(2)} km)</option>`
+    ).join('');
+
+  // On essaie de garder la sélection précédente si elle existe toujours.
+  if ([...select.options].some(o => o.value === valeurActuelle)) {
+    select.value = valeurActuelle;
+  }
+}
+
+// Reconstruit le tableau des records manuels (le plus récent en premier),
+// avec un lien vers l'activité liée (si renseignée) et un bouton de
+// suppression par ligne.
+function afficherRecordsManuels() {
+  const corps = document.getElementById('corps-tableau-records-manuels');
+  if (!corps) return;
+
+  corps.innerHTML = '';
+  const recordsTries = [...recordsManuelsEnMemoire].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  recordsTries.forEach(record => {
+    const activiteLiee = record.activiteId ? activitesEnMemoire.find(a => a.id === record.activiteId) : null;
+
+    const ligne = document.createElement('tr');
+    ligne.innerHTML = `
+      <td>${record.nom}</td>
+      <td>${record.valeur}</td>
+      <td>${record.date ? formatDateSeule(record.date) : '--'}</td>
+      <td>${activiteLiee ? `<a href="#" class="lien-activite-liee">Voir l'activité</a>` : '--'}</td>
+      <td><button type="button" class="bouton-supprimer-record" title="Supprimer ce record">🗑️</button></td>
+    `;
+    if (activiteLiee) {
+      ligne.querySelector('.lien-activite-liee').addEventListener('click', function (e) {
+        e.preventDefault();
+        ouvrirActiviteParId(activiteLiee.id);
+      });
+    }
+    ligne.querySelector('.bouton-supprimer-record').addEventListener('click', () => supprimerRecordManuel(record.id));
+    corps.appendChild(ligne);
+  });
+}
+
+function supprimerRecordManuel(id) {
+  db.collection('users').doc(uidActuel).collection('records').doc(id).delete()
+    .catch(erreur => console.error('Erreur de suppression du record :', erreur));
+  // Pas besoin de rafraîchir explicitement : l'écouteur Firestore
+  // (demarrerEcouteRecords) s'en charge dès que la suppression est confirmée.
+}
+
+document.getElementById('btn-ajouter-record').addEventListener('click', function () {
+  const nom = document.getElementById('record-nom').value.trim();
+  const valeur = document.getElementById('record-valeur').value.trim();
+  const date = document.getElementById('record-date').value || null;
+  const activiteId = document.getElementById('record-activite-liee').value || null;
+  const message = document.getElementById('records-manuels-message');
+
+  if (!nom || !valeur) {
+    message.textContent = '❌ Le nom et la valeur du record sont obligatoires.';
+    message.style.display = 'block';
+    return;
+  }
+
+  // Id généré côté client (plutôt qu'un id Firestore auto) : cohérent avec
+  // le reste de l'app, et pratique pour cibler ce document précis (ex.
+  // suppression) sans avoir à le relire d'abord.
+  const id = 'record-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+  db.collection('users').doc(uidActuel).collection('records').doc(id)
+    .set({ id, nom, valeur, date, activiteId })
+    .then(() => {
+      message.textContent = '✅ Record ajouté.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+      document.getElementById('record-nom').value = '';
+      document.getElementById('record-valeur').value = '';
+      document.getElementById('record-date').value = '';
+    })
+    .catch(erreur => {
+      console.error('Erreur d\'enregistrement du record :', erreur);
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
 
 document.getElementById('btn-migrer-donnees').addEventListener('click', migrerDonneesLocales);
