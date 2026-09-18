@@ -372,6 +372,7 @@ function parserTCX(xmlTexte) {
     calories: calories,
     deniveleDPlus: Math.round(deniveleDPlus),
     rpe: null, // ressenti (1-10) : pas encore renseigné à l'import, on le demande juste après
+    nom: null, // nom donné par l'utilisateur (ex. "Sortie longue"), jamais dans le .tcx : saisi après coup, comme le RPE
     laps: laps, // détail par tour ("lap"), pour le tableau affiché dans le détail d'activité
     points: points // on garde le détail, utile pour la carte/graphiques plus tard
   };
@@ -403,6 +404,7 @@ function afficherActivite(activite) {
   // tout frais), sinon il reste vide.
   derniereActiviteImporteeId = activite.id;
   document.getElementById('rpe-select').value = activite.rpe ? String(activite.rpe) : '';
+  document.getElementById('nom-input').value = activite.nom || '';
 }
 
 // --- Petites fonctions utilitaires de formatage ---
@@ -745,6 +747,75 @@ document.getElementById('btn-valider-detail-rpe').addEventListener('click', func
   enregistrerRPE(act.id, parseInt(valeur), function (succes) {
     if (succes) act.rpe = parseInt(valeur); // on garde l'objet en mémoire synchronisé
   });
+});
+
+// ============================================================
+// NOM DE L'ACTIVITÉ — saisi librement par l'utilisateur (ex. "Sortie
+// longue", "Fractionné au parc"), pour se repérer plus facilement dans le
+// tableau historique qu'avec la seule date. Un `.tcx` ne contient aucun
+// titre : ce champ est donc toujours vide à l'import, et se saisit après
+// coup — même principe que le RPE juste au-dessus.
+// ============================================================
+
+// Met à jour le champ "nom" d'une activité déjà enregistrée dans Firestore.
+// Une valeur vide (une fois les espaces superflus enlevés) est enregistrée
+// comme `null`, pour permettre de retirer un nom déjà donné. On RENVOIE la
+// promesse (même principe que sauvegarderActivite/enregistrerReglages) pour
+// que l'appelant sache attendre la confirmation avant d'afficher "✅".
+function enregistrerNom(idActivite, valeurNom) {
+  const nomNettoye = valeurNom.trim() === '' ? null : valeurNom.trim();
+  return db.collection('users').doc(uidActuel).collection('activites').doc(idActivite)
+    .update({ nom: nomNettoye })
+    .then(() => nomNettoye)
+    .catch(erreur => {
+      console.error('Erreur d\'enregistrement du nom :', erreur);
+      throw erreur;
+    });
+}
+
+document.getElementById('btn-valider-nom').addEventListener('click', function () {
+  if (derniereActiviteImporteeId === null) return;
+  const valeur = document.getElementById('nom-input').value;
+  const message = document.getElementById('nom-message');
+  enregistrerNom(derniereActiviteImporteeId, valeur)
+    .then(nomNettoye => {
+      // Si l'activité tout juste importée est toujours affichée, on garde
+      // le champ synchronisé avec la valeur réellement enregistrée (ex. si
+      // l'utilisateur n'avait tapé que des espaces, le champ se vide).
+      const idx = activitesEnMemoire.findIndex(a => a.id === derniereActiviteImporteeId);
+      if (idx !== -1) activitesEnMemoire[idx].nom = nomNettoye;
+      document.getElementById('nom-input').value = nomNettoye || '';
+      message.textContent = '✅ Nom enregistré.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+document.getElementById('btn-valider-detail-nom').addEventListener('click', function () {
+  if (activiteEnCoursAffichage === null) return;
+  const act = activitesEnMemoire[activiteEnCoursAffichage];
+  if (!act) return;
+  const valeur = document.getElementById('detail-nom-input').value;
+  const message = document.getElementById('detail-nom-message');
+  enregistrerNom(act.id, valeur)
+    .then(nomNettoye => {
+      act.nom = nomNettoye; // on garde l'objet en mémoire synchronisé
+      document.getElementById('detail-nom-input').value = nomNettoye || '';
+      document.getElementById('detail-titre').textContent = act.nom
+        ? `${act.nom} — ${formatDate(act.date)}`
+        : `Détail de l'activité du ${formatDate(act.date)}`;
+      message.textContent = '✅ Nom enregistré.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
 });
 
 // ============================================================
@@ -1710,6 +1781,7 @@ let triOrdre = 'desc'; // 'asc' ou 'desc'
 // le tri ou d'apparaître à un endroit arbitraire.
 const COMPARATEURS_TRI = {
   date: act => new Date(act.date).getTime(),
+  nom: act => (act.nom || '').toLowerCase(),
   sport: act => (act.sport || '').toLowerCase(),
   distance: act => act.distanceMetres,
   duree: act => act.dureeSecondes,
@@ -1754,6 +1826,7 @@ function dessinerTableauActivites() {
     const charge = calculerCharge(act);
     ligne.innerHTML = `
       <td>${formatDate(act.date)}</td>
+      <td>${act.nom ? act.nom : '<span class="texte-attenue">Sans nom</span>'}</td>
       <td>${act.sport}</td>
       <td>${(act.distanceMetres / 1000).toFixed(2)} km</td>
       <td>${formatDuree(act.dureeSecondes)}</td>
@@ -1901,7 +1974,10 @@ function afficherDetailActivite(index) {
 
   panneauDetail.style.display = 'block';
 
-  document.getElementById('detail-titre').textContent = `Détail de l'activité du ${formatDate(act.date)}`;
+  document.getElementById('detail-titre').textContent = act.nom
+    ? `${act.nom} — ${formatDate(act.date)}`
+    : `Détail de l'activité du ${formatDate(act.date)}`;
+  document.getElementById('detail-nom-input').value = act.nom || '';
   document.getElementById('detail-date').textContent = formatDate(act.date);
   document.getElementById('detail-sport').textContent = act.sport;
   document.getElementById('detail-distance').textContent = (act.distanceMetres / 1000).toFixed(2) + ' km';
