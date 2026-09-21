@@ -320,7 +320,11 @@ function parserTCX(xmlTexte) {
       distanceMetres: distanceLap,
       calories: caloriesLap,
       fcMoyenne: fcLap ? parseInt(fcLap) : null,
-      allureMinParKm: distanceLap > 0 ? (dureeLap / 60) / (distanceLap / 1000) : null
+      allureMinParKm: distanceLap > 0 ? (dureeLap / 60) / (distanceLap / 1000) : null,
+      // Heure de départ du tour (attribut StartTime du <Lap>), gardée pour
+      // pouvoir retrouver plus tard QUELS points appartiennent à ce tour
+      // (utilisé par le graphique "Allure par tour", voir afficherGraphiqueAllure).
+      heureDebutISO: lapXML.getAttribute('StartTime') || null
     };
   });
 
@@ -1394,6 +1398,35 @@ function calculerVAP(allureMinParKm, pente) {
   return allureMinParKm / facteur;
 }
 
+// Calcule l'allure et la VAP d'un petit segment [p1, p2] (deux points
+// consécutifs, avec leur "tempsEcouleSecondes" déjà calculé par
+// ajouterTempsEcoule), ou renvoie null si le segment doit être ignoré
+// (immobile/recul, durée nulle, saut GPS aberrant, allure aberrante...).
+// Utilisé par les deux graphiques "en barres" (allure par km ET par tour)
+// pour ne pas dupliquer deux fois les mêmes filtres anti-aberrations.
+function calculerSegmentAllureVAP(p1, p2) {
+  if (p1.distance === null || p2.distance === null) return null;
+
+  const distM = p2.distance - p1.distance;
+  const dureeMins = (p2.tempsEcouleSecondes - p1.tempsEcouleSecondes) / 60;
+
+  // Segments clairement invalides : immobile/recul, durée nulle, ou saut
+  // GPS aberrant (> 500 m d'un point au suivant = erreur de mesure)
+  if (distM <= 0 || dureeMins <= 0 || distM > 500) return null;
+
+  const distKm = distM / 1000;
+  const allure = dureeMins / distKm;
+  if (allure < 2 || allure > 20) return null; // allure de segment aberrante (arrêt, saut GPS...)
+
+  let pente = 0;
+  if (p1.altitude !== null && p2.altitude !== null) {
+    pente = calculerPente(p1.altitude, p2.altitude, distKm);
+  }
+  const vap = calculerVAP(allure, pente);
+
+  return { distKm, dureeMins, allure, vap };
+}
+
 // Calcule la VAP MOYENNE sur l'ENSEMBLE de l'activité (par opposition à la
 // VAP par km affichée dans le graphique en barres) : on parcourt les mêmes
 // segments consécutifs que pour le graphique par km (mêmes filtres contre
@@ -1435,7 +1468,64 @@ function calculerVAPMoyenneActivite(points) {
 }
 
 // Affiche la courbe d'allure (instantanée, moyenne par km ou barre par km)
-function afficherGraphiqueAllure(points, dureeSecondes) {
+// Construit le graphique en barres superposées (allure + VAP) commun aux
+// modes "par km" et "par tour" : seul le DÉCOUPAGE en tranches change entre
+// les deux (voir afficherGraphiqueAllure), l'affichage lui-même est identique.
+function creerGraphiqueBarresAllureVAP(ctx, labels, donnees) {
+  const maxAllure = Math.max(...donnees.map(d => d.allure), 0);
+  const maxVap = Math.max(...donnees.map(d => d.vap), 0);
+  const yMax = Math.max(maxAllure, maxVap) * 1.15;
+
+  return new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Allure (min/km)',
+          data: donnees.map(d => d.allure),
+          backgroundColor: 'rgba(75, 192, 192, 0.6)',
+          borderColor: 'rgb(75, 192, 192)',
+          borderWidth: 1
+        },
+        {
+          label: 'VAP (min/km)',
+          data: donnees.map(d => d.vap),
+          backgroundColor: 'rgba(255, 99, 132, 0.5)',
+          borderColor: 'rgb(255, 99, 132)',
+          borderWidth: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: true, position: 'top' },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const label = ctx.dataset.label || '';
+              return label + ' : ' + formaterAllureMinutes(ctx.raw) + ' min/km';
+            }
+          }
+        }
+      },
+      scales: {
+        y: {
+          min: 0,
+          max: yMax > 0 ? yMax : 1,
+          ticks: { callback: v => formaterAllureMinutes(Number(v)) },
+          title: { display: true, text: 'Allure (min/km)' }
+        }
+      }
+    }
+  });
+}
+
+// Affiche la courbe/les barres d'allure (instantanée, par km ou par tour).
+// `laps` (tableau des tours, voir parserTCX) n'est nécessaire que pour le
+// mode "barreParLap" ; les autres modes l'ignorent.
+function afficherGraphiqueAllure(points, dureeSecondes, laps) {
   const ctx = document.getElementById('chartAllure').getContext('2d');
   if (chartAllureInstance) chartAllureInstance.destroy();
 
@@ -1457,6 +1547,14 @@ function afficherGraphiqueAllure(points, dureeSecondes) {
     title: { display: true, text: 'Temps écoulé' }
   };
 
+  // Le message "pas assez de tours" (mode barreParLap) et le graphique
+  // partagent le même emplacement : par défaut on cache le message et on
+  // montre le canvas, le mode barreParLap inversera ça si besoin.
+  const canvas = document.getElementById('chartAllure');
+  const messageLaps = document.getElementById('allure-message-laps');
+  canvas.style.display = '';
+  messageLaps.style.display = 'none';
+
   if (modeAllureActuel === 'barreParKm') {
     // --- Allure par km + VAP, en barres superposées ---
     // On accumule distance/durée par km (au lieu de filtrer les segments par
@@ -1466,44 +1564,19 @@ function afficherGraphiqueAllure(points, dureeSecondes) {
     const segmentsParKm = new Map();
 
     for (let i = 1; i < pointsAvecTemps.length; i++) {
-      const p1 = pointsAvecTemps[i - 1];
-      const p2 = pointsAvecTemps[i];
-
-      if (p2.distance === null || p1.distance === null) continue;
-
-      const distM = p2.distance - p1.distance;
-      const dureeMins = (p2.tempsEcouleSecondes - p1.tempsEcouleSecondes) / 60;
-
-      // On ignore uniquement les segments clairement invalides : immobile /
-      // recul (capteur qui "rembobine"), durée nulle, ou saut GPS aberrant
-      // (> 500 m d'un point au suivant = erreur de mesure, pas une vraie foulée)
-      if (distM <= 0 || dureeMins <= 0 || distM > 500) continue;
-
-      const distKm = distM / 1000;
-      const allureSegment = dureeMins / distKm;
-
-      // Filtre les allures de segment aberrantes (arrêt, saut GPS...)
-      if (allureSegment < 2 || allureSegment > 20) continue;
-
-      // Calcul de la pente pour la VAP
-      let pente = 0;
-      if (p1.altitude !== null && p2.altitude !== null) {
-        pente = calculerPente(p1.altitude, p2.altitude, distKm);
-      }
-
-      // Calcul de la VAP du segment
-      const vapSegment = calculerVAP(allureSegment, pente);
+      const segment = calculerSegmentAllureVAP(pointsAvecTemps[i - 1], pointsAvecTemps[i]);
+      if (segment === null) continue;
 
       // Associe au kilomètre entier et accumule (pondéré par la distance)
-      const numeroKm = Math.floor(p2.distance / 1000);
+      const numeroKm = Math.floor(pointsAvecTemps[i].distance / 1000);
 
       if (!segmentsParKm.has(numeroKm)) {
         segmentsParKm.set(numeroKm, { distTotaleKm: 0, dureeTotaleMin: 0, vapPondereTotal: 0 });
       }
       const bin = segmentsParKm.get(numeroKm);
-      bin.distTotaleKm += distKm;
-      bin.dureeTotaleMin += dureeMins;
-      bin.vapPondereTotal += vapSegment * distKm;
+      bin.distTotaleKm += segment.distKm;
+      bin.dureeTotaleMin += segment.dureeMins;
+      bin.vapPondereTotal += segment.vap * segment.distKm;
     }
 
     // Allure réelle du km = temps total / distance totale (plus juste qu'une
@@ -1516,54 +1589,78 @@ function afficherGraphiqueAllure(points, dureeSecondes) {
         vap: data.vapPondereTotal / data.distTotaleKm
       }));
 
-    const maxAllure = Math.max(...donneesParKm.map(d => d.allure), 0);
-    const maxVap = Math.max(...donneesParKm.map(d => d.vap), 0);
-    const yMax = Math.max(maxAllure, maxVap) * 1.15;
+    chartAllureInstance = creerGraphiqueBarresAllureVAP(ctx, donneesParKm.map(d => `Km ${d.km}`), donneesParKm);
+    return;
+  }
 
-    chartAllureInstance = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: donneesParKm.map(d => `Km ${d.km}`),
-        datasets: [
-          {
-            label: 'Allure (min/km)',
-            data: donneesParKm.map(d => d.allure),
-            backgroundColor: 'rgba(75, 192, 192, 0.6)',
-            borderColor: 'rgb(75, 192, 192)',
-            borderWidth: 1
-          },
-          {
-            label: 'VAP (min/km)',
-            data: donneesParKm.map(d => d.vap),
-            backgroundColor: 'rgba(255, 99, 132, 0.5)',
-            borderColor: 'rgb(255, 99, 132)',
-            borderWidth: 1
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        plugins: {
-          legend: { display: true, position: 'top' },
-          tooltip: {
-            callbacks: {
-              label: ctx => {
-                const label = ctx.dataset.label || '';
-                return label + ' : ' + formaterAllureMinutes(ctx.raw) + ' min/km';
-              }
-            }
-          }
-        },
-        scales: {
-          y: {
-            min: 0,
-            max: yMax > 0 ? yMax : 1,
-            ticks: { callback: v => formaterAllureMinutes(Number(v)) },
-            title: { display: true, text: 'Allure (min/km)' }
-          }
-        }
-      }
+  if (modeAllureActuel === 'barreParLap') {
+    // --- Allure par tour (lap) + VAP, en barres superposées ---
+    // Même principe que "par km" ci-dessus, mais le découpage en tranches se
+    // fait par TOUR (chaque pression du bouton "tour" sur la montre), pas
+    // par kilomètre entier.
+    //
+    // Même seuil que le tableau des tours (afficherTableauLaps) : avec 0 ou
+    // 1 seul tour, il n'y a rien à comparer entre tours, on affiche un
+    // message plutôt qu'un graphique à une seule barre.
+    if (!laps || laps.length <= 1) {
+      canvas.style.display = 'none';
+      messageLaps.style.display = 'block';
+      return;
+    }
+
+    // Bornes de chaque tour en "temps écoulé depuis le début de l'activité"
+    // (même base que pointsAvecTemps[i].tempsEcouleSecondes), à partir de
+    // l'attribut StartTime de chaque <Lap> du .tcx (voir parserTCX).
+    const premierTempsMs = convertirTempsEnMillisecondes(pointsAvecTemps[0].time);
+    const bornesLaps = laps.map(l => {
+      const t = convertirTempsEnMillisecondes(l.heureDebutISO);
+      return Number.isFinite(t) ? (t - premierTempsMs) / 1000 : null;
     });
+
+    // Le tour auquel appartient un temps écoulé donné : le dernier tour dont
+    // la borne de départ est <= ce temps (peu de tours, recherche simple).
+    function numeroLapPour(tempsEcoule) {
+      let indexTrouve = 0;
+      for (let i = 0; i < bornesLaps.length; i++) {
+        if (bornesLaps[i] !== null && bornesLaps[i] <= tempsEcoule) indexTrouve = i;
+      }
+      return indexTrouve;
+    }
+
+    const segmentsParLap = new Map();
+
+    for (let i = 1; i < pointsAvecTemps.length; i++) {
+      const p1 = pointsAvecTemps[i - 1];
+      const segment = calculerSegmentAllureVAP(p1, pointsAvecTemps[i]);
+      if (segment === null) continue;
+
+      // On classe le segment selon le tour où il a COMMENCÉ (p1), pas celui
+      // où il finit (p2) : au point de jonction exact entre deux tours (le
+      // point dupliqué, même heure/distance à la fin d'un tour et au début
+      // du suivant — voir parserTCX), utiliser p2 classerait à tort le tout
+      // dernier segment d'un tour dans le tour SUIVANT, puisque son heure de
+      // fin correspond pile à l'heure de départ du tour suivant.
+      const numeroLap = numeroLapPour(p1.tempsEcouleSecondes);
+
+      if (!segmentsParLap.has(numeroLap)) {
+        segmentsParLap.set(numeroLap, { distTotaleKm: 0, dureeTotaleMin: 0, vapPondereTotal: 0 });
+      }
+      const bin = segmentsParLap.get(numeroLap);
+      bin.distTotaleKm += segment.distKm;
+      bin.dureeTotaleMin += segment.dureeMins;
+      bin.vapPondereTotal += segment.vap * segment.distKm;
+    }
+
+    const donneesParLap = [...segmentsParLap.entries()]
+      .sort(([a], [b]) => a - b)
+      .filter(([, data]) => data.distTotaleKm > 0) // tour sans segment exploitable (trop court, tout filtré) : pas de barre plutôt qu'une division par 0
+      .map(([numeroLap, data]) => ({
+        numeroLap,
+        allure: data.dureeTotaleMin / data.distTotaleKm,
+        vap: data.vapPondereTotal / data.distTotaleKm
+      }));
+
+    chartAllureInstance = creerGraphiqueBarresAllureVAP(ctx, donneesParLap.map(d => `Tour ${d.numeroLap + 1}`), donneesParLap);
     return;
   }
 
@@ -2079,7 +2176,7 @@ function afficherDetailActivite(index) {
   afficherTableauLaps(act);
   afficherCarte(act);
   afficherGraphiqueDenivele(act.points);
-  afficherGraphiqueAllure(act.points, act.dureeSecondes);
+  afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps);
   afficherGraphiqueFC(act.points, act.dureeSecondes);
 
   panneauDetail.scrollIntoView({ behavior: 'smooth' });
@@ -2160,7 +2257,7 @@ document.getElementById('selectAllure').addEventListener('change', function(e) {
   if (activiteEnCoursAffichage !== null && activitesEnMemoire.length > activiteEnCoursAffichage) {
     const act = activitesEnMemoire[activiteEnCoursAffichage];
     if (act) {
-      afficherGraphiqueAllure(act.points, act.dureeSecondes); // ✅ Passer aussi dureeSecondes
+      afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps);
       afficherGraphiqueFC(act.points, act.dureeSecondes);
     }
   }
