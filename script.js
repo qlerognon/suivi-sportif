@@ -210,6 +210,80 @@ function importerFichiersEnSequence(fichiers, index, promessesSauvegarde) {
 
 
 // ============================================================
+// FONCTION : lisserAltitudes
+// Rôle : calculer une version "lissée" (moyenne mobile) de l'altitude de
+// chaque point, UNIQUEMENT pour servir au calcul du D+ (voir plus bas).
+//
+// Pourquoi lisser ? Sur les activités longues (plusieurs heures), l'altimètre
+// de la montre (baromètre + GPS) dérive avec le temps indépendamment du
+// relief réel : variations de pression atmosphérique au fil de la journée,
+// imprécision GPS sous couvert forestier, etc. Ce bruit, même petit d'un
+// point à l'autre, finit par gonfler artificiellement le D+, car celui-ci ne
+// compte QUE les montées : une oscillation qui monte puis redescend ajoute
+// du D+ à l'aller sans jamais en retirer au retour. Plus on a de points (ex.
+// un enregistrement toutes les secondes) et plus l'activité est longue, plus
+// cet effet s'accumule. (Vérifié sur une vraie sortie de 8h46 : les phases
+// où le coureur était immobile à l'arrivée d'un tour montraient à elles
+// seules ~215m de D+ "fantôme".)
+//
+// La moyenne mobile utilise une fenêtre basée sur le TEMPS (pas un nombre de
+// points), pour donner un résultat cohérent quel que soit l'intervalle
+// d'enregistrement de la montre (1 point/seconde ou 1 point/5 secondes...).
+//
+// Important : cette fonction ne modifie PAS points[i].altitude (l'altitude
+// brute reste utilisée telle quelle pour le graphique d'altitude et le
+// calcul des pentes par segment) — elle renvoie un tableau à part, utilisé
+// seulement par le calcul du D+.
+function lisserAltitudes(points, demiFenetreSecondes) {
+  // On ne garde que les points qui ont à la fois une altitude ET une heure
+  // valides, dans l'ordre chronologique du fichier.
+  const valides = [];
+  points.forEach((p, idx) => {
+    if (p.altitude !== null && p.time) {
+      const t = new Date(p.time).getTime();
+      if (!isNaN(t)) valides.push({ idx: idx, t: t, alt: p.altitude });
+    }
+  });
+
+  const altitudesLissees = new Array(points.length).fill(null);
+  if (valides.length === 0) return altitudesLissees;
+
+  const demiFenetreMs = demiFenetreSecondes * 1000;
+
+  // Technique "fenêtre glissante" à deux pointeurs (debut/fin) : comme les
+  // points sont triés par temps croissant, les bornes de la fenêtre
+  // [t - demiFenetre, t + demiFenetre] ne font qu'avancer au fil des points,
+  // jamais reculer. On peut donc calculer la moyenne mobile de tous les
+  // points en une seule passe (au lieu de recalculer une moyenne complète à
+  // chaque point).
+  let debut = 0;
+  let fin = 0;
+  let sommeAlt = 0;
+  let compte = 0;
+
+  for (let i = 0; i < valides.length; i++) {
+    const tCentre = valides[i].t;
+
+    // Étend la fenêtre vers l'avant : inclut les points jusqu'à tCentre + demiFenetre.
+    while (fin < valides.length && valides[fin].t - tCentre <= demiFenetreMs) {
+      sommeAlt += valides[fin].alt;
+      compte++;
+      fin++;
+    }
+    // Réduit la fenêtre par l'arrière : exclut les points trop anciens (avant tCentre - demiFenetre).
+    while (tCentre - valides[debut].t > demiFenetreMs) {
+      sommeAlt -= valides[debut].alt;
+      compte--;
+      debut++;
+    }
+
+    altitudesLissees[valides[i].idx] = compte > 0 ? sommeAlt / compte : valides[i].alt;
+  }
+
+  return altitudesLissees;
+}
+
+// ============================================================
 // FONCTION : parserTCX
 // Rôle : transformer le texte XML du fichier .tcx en un objet
 // JS structuré et facile à utiliser (durée, distance, etc.)
@@ -314,19 +388,29 @@ function parserTCX(xmlTexte) {
   //
   // Pourquoi pas comparer juste 2 points consécutifs (ancienne méthode) ?
   // Parce que sur une montée douce et régulière (ex. une côte de ville),
-  // l'écart D'UN POINT À L'AUTRE peut rester en dessous de 0.5 m à chaque
+  // l'écart D'UN POINT À L'AUTRE peut rester en dessous du seuil à chaque
   // fois, alors que l'écart cumulé sur toute la montée est important. En
   // comparant toujours au dernier point "confirmé" plutôt qu'au point
   // juste précédent, on capture bien ces montées progressives tout en
   // continuant à filtrer le bruit du capteur (petites oscillations qui ne
   // dépassent jamais le seuil).
+  //
+  // On applique ce calcul sur l'altitude LISSÉE (voir lisserAltitudes
+  // ci-dessus), pas sur l'altitude brute : sur les sorties longues, la
+  // dérive lente de l'altimètre (pression atmosphérique, imprécision GPS)
+  // finissait par gonfler le D+ même avec un seuil de bruit, car un seuil
+  // seul ne filtre que le bruit point-à-point, pas une dérive progressive
+  // sur plusieurs minutes. Le lissage (moyenne mobile sur 90 secondes)
+  // atténue cette dérive avant même d'appliquer le seuil.
+  const altitudesLissees = lisserAltitudes(points, 45); // fenêtre de 90s (45s de chaque côté)
+
   let deniveleDPlus = 0;
-  const SEUIL_BRUIT = 0.5; // en mètres
+  const SEUIL_BRUIT = 2; // en mètres (relevé de 0.5 à 2 en même temps que l'ajout du lissage ci-dessus)
 
   let altitudeReference = null; // dernière altitude "confirmée" (référence courante)
 
   for (let i = 0; i < points.length; i++) {
-    const altitudeActuelle = points[i].altitude;
+    const altitudeActuelle = altitudesLissees[i];
     if (altitudeActuelle === null) continue; // point sans altitude : on l'ignore
 
     if (altitudeReference === null) {
