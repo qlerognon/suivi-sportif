@@ -320,11 +320,7 @@ function parserTCX(xmlTexte) {
       distanceMetres: distanceLap,
       calories: caloriesLap,
       fcMoyenne: fcLap ? parseInt(fcLap) : null,
-      allureMinParKm: distanceLap > 0 ? (dureeLap / 60) / (distanceLap / 1000) : null,
-      // Heure de départ du tour (attribut StartTime du <Lap>), gardée pour
-      // pouvoir retrouver plus tard QUELS points appartiennent à ce tour
-      // (utilisé par le graphique "Allure par tour", voir afficherGraphiqueAllure).
-      heureDebutISO: lapXML.getAttribute('StartTime') || null
+      allureMinParKm: distanceLap > 0 ? (dureeLap / 60) / (distanceLap / 1000) : null
     };
   });
 
@@ -1609,12 +1605,19 @@ function afficherGraphiqueAllure(points, dureeSecondes, laps) {
     }
 
     // Bornes de chaque tour en "temps écoulé depuis le début de l'activité"
-    // (même base que pointsAvecTemps[i].tempsEcouleSecondes), à partir de
-    // l'attribut StartTime de chaque <Lap> du .tcx (voir parserTCX).
-    const premierTempsMs = convertirTempsEnMillisecondes(pointsAvecTemps[0].time);
+    // (même base que pointsAvecTemps[i].tempsEcouleSecondes) : la somme
+    // CUMULÉE des durées des tours précédents (`dureeSecondes`, connu pour
+    // chaque tour depuis le 14/09/2026 — voir parserTCX). Un tour se termine
+    // exactement là où le suivant commence (enregistrement continu), donc ce
+    // cumul donne directement l'heure de départ de chaque tour, sans avoir
+    // besoin d'une heure absolue. Avantage important : ça fonctionne aussi
+    // pour des activités importées AVANT l'ajout de ce graphique (pas besoin
+    // de réimporter le .tcx pour en profiter).
+    let cumulSecondes = 0;
     const bornesLaps = laps.map(l => {
-      const t = convertirTempsEnMillisecondes(l.heureDebutISO);
-      return Number.isFinite(t) ? (t - premierTempsMs) / 1000 : null;
+      const borne = cumulSecondes;
+      cumulSecondes += l.dureeSecondes || 0;
+      return borne;
     });
 
     // Le tour auquel appartient un temps écoulé donné : le dernier tour dont
@@ -1622,7 +1625,7 @@ function afficherGraphiqueAllure(points, dureeSecondes, laps) {
     function numeroLapPour(tempsEcoule) {
       let indexTrouve = 0;
       for (let i = 0; i < bornesLaps.length; i++) {
-        if (bornesLaps[i] !== null && bornesLaps[i] <= tempsEcoule) indexTrouve = i;
+        if (bornesLaps[i] <= tempsEcoule) indexTrouve = i;
       }
       return indexTrouve;
     }
