@@ -331,10 +331,15 @@
             <select id="selectAllure">
               <option value="instantanee">Allure instantanée</option>
               <option value="barreParKm">Allure par km (barres)</option>
+              <option value="barreParLap">Allure par tour/lap (barres)</option>
             </select>
           </div>
           <h3>Allure au fil du temps</h3>
           <canvas id="chartAllure"></canvas>
+          <!-- Affiché à la place du graphique quand le mode "par tour" est
+               choisi mais que l'activité n'a pas plusieurs vrais tours (même
+               seuil que le tableau des tours, voir afficherTableauLaps) -->
+          <p id="allure-message-laps" class="message-neutre" style="display:none;">Cette activité n'a qu'un seul tour (aucun appui sur "tour" pendant la séance) : rien à comparer entre tours ici. Voir "Allure par km" pour un découpage par distance.</p>
         </div>
 
         <div style="margin-top: 30px;">
