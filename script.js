@@ -539,11 +539,10 @@ function formatAllure(minParKm) {
 }
 
 // ============================================================
-// TYPE D'ACTIVITÉ (22/09/2026) — sports au-delà de la course à pied "route"
-// (vélo, natation, tapis, ski de fond, musculation), et distinction
-// trail/route pour la course à pied elle-même. Un `.tcx` ne code presque
-// jamais cette distinction (l'attribut `Sport` d'origine ne connaît que des
-// valeurs génériques comme "Running"/"Biking"/"Other") : demandé à
+// TYPE D'ACTIVITÉ (22/09/2026) — sports au-delà de la course à pied
+// (vélo, natation, tapis, ski de fond, musculation). Un `.tcx` ne code
+// presque jamais cette distinction (l'attribut `Sport` d'origine ne connaît
+// que des valeurs génériques comme "Running"/"Biking"/"Other") : demandé à
 // l'utilisateur via un sélecteur juste après l'import (même principe que le
 // nom/RPE), modifiable à tout moment depuis le détail d'une activité.
 // `activite.sport` (valeur brute du .tcx) reste inchangé et toujours
@@ -551,11 +550,16 @@ function formatAllure(minParKm) {
 // l'utilisateur (une des clés ci-dessous, ou `null` tant qu'elle n'a pas
 // encore été renseignée — y compris pour toute activité importée avant
 // l'ajout de cette fonctionnalité).
+//
+// Trail et Route ont d'abord été deux clés séparées (22/09/2026), avant
+// d'être réunies en une seule catégorie "Course à pied" (23/09/2026, demande
+// de l'utilisateur, y compris pour les records automatiques) : voir
+// normaliserTypeActivite juste en dessous pour la compatibilité avec les
+// activités déjà classées 'trail'/'route' avant ce changement.
 // ============================================================
 
 const TYPES_ACTIVITE = [
-  { cle: 'trail', libelle: 'Course à pied — Trail' },
-  { cle: 'route', libelle: 'Course à pied — Route' },
+  { cle: 'course_a_pied', libelle: 'Course à pied' },
   { cle: 'velo', libelle: 'Vélo' },
   { cle: 'natation', libelle: 'Natation' },
   { cle: 'tapis', libelle: 'Course sur tapis' },
@@ -563,6 +567,19 @@ const TYPES_ACTIVITE = [
   { cle: 'musculation', libelle: 'Musculation' },
   { cle: 'autre', libelle: 'Autre' }
 ];
+
+// Migration douce (23/09/2026) : Trail et Route ont été fusionnés en une
+// seule catégorie "course_a_pied". Les activités déjà classées 'trail' ou
+// 'route' dans Firestore ne sont PAS réécrites en masse (pas de migration
+// risquée) — elles sont simplement normalisées ICI, au chargement depuis
+// Firestore (voir demarrerEcouteActivites et demarrerEcouteChaussures), pour
+// se comporter exactement comme si elles avaient été classées
+// 'course_a_pied' dès le départ (records, suggestion de chaussures, filtre
+// de l'aperçu...). Aucun autre endroit du code n'a besoin de connaître les
+// anciennes clés.
+function normaliserTypeActivite(cle) {
+  return (cle === 'trail' || cle === 'route') ? 'course_a_pied' : cle;
+}
 
 function libelleType(cle) {
   const info = TYPES_ACTIVITE.find(t => t.cle === cle);
@@ -583,12 +600,14 @@ function libelleTypeActivite(activite) {
 }
 
 // Pré-remplissage proposé du sélecteur de type juste après l'import : fiable
-// uniquement pour "Biking" (aucun autre sport de la liste n'est distingué
-// dans l'attribut Sport d'un .tcx) — dans tous les autres cas on laisse le
-// champ vide plutôt que de deviner (ex. "Running" ne dit pas si c'était du
-// trail ou de la route).
+// pour "Biking" (Vélo) et, depuis la fusion Trail/Route du 23/09/2026,
+// également pour "Running" (Course à pied ne désigne plus qu'une seule
+// catégorie, il n'y a donc plus d'ambiguïté à lever) — dans tous les autres
+// cas on laisse le champ vide plutôt que de deviner.
 function typeParDefautDepuisSportBrut(sportBrut) {
-  return sportBrut === 'Biking' ? 'velo' : '';
+  if (sportBrut === 'Biking') return 'velo';
+  if (sportBrut === 'Running') return 'course_a_pied';
+  return '';
 }
 
 // La musculation n'a ni distance, ni allure, ni D+, ni tracé GPS — à la
@@ -1071,14 +1090,18 @@ let periodeApercuActuelle = 'semaine'; // 'semaine' ou 'mois'
 // futures à afficher) — voir le bouton "suivant" désactivé dans afficherApercu().
 let offsetPeriodeApercu = 0;
 
-// Filtre par type d'activité (trail/route/vélo/...) appliqué aux métriques
+// Filtre par type d'activité (course à pied/vélo/...) appliqué aux métriques
 // dérivées des ACTIVITÉS (distance, charge, RPE, D+) — chaîne vide = "Tous
 // les sports" (comportement d'origine, aucun filtre). Ajouté le 22/09/2026 :
-// demande de l'utilisateur, dont le sport principal (trail) était noyé dans
-// la courbe de distance cumulée par une grosse sortie vélo occasionnelle. Le
-// Poids n'est PAS une métrique liée à une activité (c'est une mesure du
-// corps, pas d'une sortie) : il reste toujours affiché quel que soit ce
-// filtre, voir calculerSeriesApercu.
+// demande de l'utilisateur, dont le sport principal (course à pied) était
+// noyé dans la courbe de distance cumulée par une grosse sortie vélo
+// occasionnelle. Le Poids n'est PAS une métrique liée à une activité (c'est
+// une mesure du corps, pas d'une sortie) : il reste toujours affiché quel
+// que soit ce filtre, voir calculerSeriesApercu. Une valeur de ce filtre
+// correspond directement à une clé de TYPES_ACTIVITE — plus besoin d'un
+// regroupement séparé depuis la fusion Trail/Route du 23/09/2026 (voir
+// normaliserTypeActivite), qui s'applique désormais partout dans l'app, pas
+// seulement à ce filtre.
 let filtreTypeApercu = '';
 
 // Renvoie les bornes {debut, fin} (objets Date) de la période demandée :
@@ -2152,7 +2175,12 @@ function formatDateSeule(dateISO) {
 function demarrerEcouteActivites(uid) {
   return db.collection('users').doc(uid).collection('activites')
     .onSnapshot(function (snapshot) {
-      activitesEnMemoire = snapshot.docs.map(doc => doc.data());
+      // normaliserTypeActivite : voir sa définition, migration douce
+      // trail/route -> course_a_pied (23/09/2026).
+      activitesEnMemoire = snapshot.docs.map(doc => {
+        const donnees = doc.data();
+        return { ...donnees, typeActivite: normaliserTypeActivite(donnees.typeActivite) };
+      });
       rafraichirAffichageActivites();
     }, function (erreur) {
       console.error('Erreur d\'écoute des activités :', erreur);
@@ -2806,29 +2834,48 @@ function meilleurTempsPourDistance(activite, distanceCibleMetres) {
 }
 
 // Parcourt TOUTES les activités connues et calcule, pour chaque TYPE
-// d'activité (trail/route/vélo/... — voir libelleTypeActivite, qui regroupe
-// par la classification choisie par l'utilisateur, avec un intitulé de
-// repli pour les activités pas encore classées) et chaque distance standard,
-// le meilleur temps trouvé (et dans quelle activité). La musculation est
-// exclue (pas de distance parcourue). Renvoie une Map : libellé de type ->
-// Map(cle distance -> { distanceInfo, dureeSecondes, activite }).
+// d'activité (course à pied/vélo/... — voir libelleTypeActivite, qui
+// regroupe par la classification choisie par l'utilisateur, avec un
+// intitulé de repli pour les activités pas encore classées), deux familles
+// de records. La musculation est exclue des deux (pas de distance
+// parcourue) :
+//  - vitesse sur une distance standard (1 km, 5 km...) : le meilleur temps
+//    trouvé (et dans quelle activité) — dans `distances`.
+//  - "d'ensemble" (ajouté le 23/09/2026, demande de l'utilisateur) :
+//    l'activité la plus longue et celle au D+ le plus important, TOUTES
+//    distances confondues — dans `plusLongue` / `plusDenivele`.
+// Renvoie une Map : libellé de type -> {
+//   distances: Map(cle distance -> { distanceInfo, dureeSecondes, activite }),
+//   plusLongue: { activite, distanceMetres } | null,
+//   plusDenivele: { activite, deniveleDPlus } | null
+// }.
 function calculerRecordsAutomatiques() {
   const parType = new Map();
 
   activitesEnMemoire.forEach(activite => {
     if (estSportSansDistance(activite)) return;
     const libelle = libelleTypeActivite(activite);
+    if (!parType.has(libelle)) {
+      parType.set(libelle, { distances: new Map(), plusLongue: null, plusDenivele: null });
+    }
+    const infosType = parType.get(libelle);
+
     DISTANCES_RECORDS.forEach(distanceInfo => {
       const duree = meilleurTempsPourDistance(activite, distanceInfo.metres);
       if (duree === null) return;
 
-      if (!parType.has(libelle)) parType.set(libelle, new Map());
-      const recordsType = parType.get(libelle);
-      const recordActuel = recordsType.get(distanceInfo.cle);
+      const recordActuel = infosType.distances.get(distanceInfo.cle);
       if (!recordActuel || duree < recordActuel.dureeSecondes) {
-        recordsType.set(distanceInfo.cle, { distanceInfo, dureeSecondes: duree, activite });
+        infosType.distances.set(distanceInfo.cle, { distanceInfo, dureeSecondes: duree, activite });
       }
     });
+
+    if (!infosType.plusLongue || activite.distanceMetres > infosType.plusLongue.distanceMetres) {
+      infosType.plusLongue = { activite, distanceMetres: activite.distanceMetres };
+    }
+    if (!infosType.plusDenivele || activite.deniveleDPlus > infosType.plusDenivele.deniveleDPlus) {
+      infosType.plusDenivele = { activite, deniveleDPlus: activite.deniveleDPlus };
+    }
   });
 
   return parType;
@@ -2870,7 +2917,7 @@ function afficherRecordsAutomatiques() {
 
   if (parType.size === 0) {
     zone.innerHTML = '';
-    message.textContent = "Aucun record détecté pour l'instant : il faut au moins une activité couvrant entièrement une des distances standards (1 km, 5 km, 10 km, semi ou marathon).";
+    message.textContent = "Aucun record détecté pour l'instant : importe au moins une activité (hors musculation) pour voir apparaître ses records ici — temps sur une distance standard, distance la plus longue et D+ le plus important.";
     message.style.display = 'block';
     return;
   }
@@ -2879,7 +2926,7 @@ function afficherRecordsAutomatiques() {
   zone.innerHTML = '';
 
   [...parType.keys()].sort().forEach(libelle => {
-    const recordsType = parType.get(libelle);
+    const infosType = parType.get(libelle);
 
     const bloc = document.createElement('div');
     bloc.className = 'records-bloc-sport';
@@ -2893,7 +2940,7 @@ function afficherRecordsAutomatiques() {
     const corps = document.createElement('tbody');
 
     DISTANCES_RECORDS.forEach(distanceInfo => {
-      const record = recordsType.get(distanceInfo.cle);
+      const record = infosType.distances.get(distanceInfo.cle);
       if (!record) return;
 
       const allureMinParKm = (record.dureeSecondes / 60) / (distanceInfo.metres / 1000);
@@ -2917,6 +2964,55 @@ function afficherRecordsAutomatiques() {
     conteneurScroll.className = 'tableau-scroll';
     conteneurScroll.appendChild(tableau);
     bloc.appendChild(conteneurScroll);
+
+    // Records "d'ensemble" (23/09/2026, demande de l'utilisateur) : pas un
+    // temps sur une distance standard comme le tableau ci-dessus, mais
+    // l'activité la plus longue et celle au D+ le plus important, toutes
+    // distances confondues, pour ce type de sport.
+    const lignesExtremes = [];
+    if (infosType.plusLongue) {
+      lignesExtremes.push({
+        libelle: 'Distance la plus longue',
+        valeur: (infosType.plusLongue.distanceMetres / 1000).toFixed(2) + ' km',
+        activite: infosType.plusLongue.activite
+      });
+    }
+    if (infosType.plusDenivele) {
+      lignesExtremes.push({
+        libelle: 'D+ le plus important',
+        valeur: Math.round(infosType.plusDenivele.deniveleDPlus) + ' m',
+        activite: infosType.plusDenivele.activite
+      });
+    }
+    if (lignesExtremes.length > 0) {
+      const sousTitre = document.createElement('h4');
+      sousTitre.textContent = 'Autres records';
+      bloc.appendChild(sousTitre);
+
+      const tableauExtremes = document.createElement('table');
+      tableauExtremes.innerHTML = '<thead><tr><th>Record</th><th>Valeur</th><th>Date</th></tr></thead>';
+      const corpsExtremes = document.createElement('tbody');
+
+      lignesExtremes.forEach(({ libelle: libelleLigne, valeur, activite }) => {
+        const ligne = document.createElement('tr');
+        ligne.style.cursor = 'pointer';
+        ligne.title = "Voir l'activité";
+        ligne.innerHTML = `
+          <td>${libelleLigne}</td>
+          <td>${valeur}</td>
+          <td>${formatDate(activite.date)}</td>
+        `;
+        ligne.addEventListener('click', () => ouvrirActiviteParId(activite.id));
+        corpsExtremes.appendChild(ligne);
+      });
+
+      tableauExtremes.appendChild(corpsExtremes);
+      const conteneurScrollExtremes = document.createElement('div');
+      conteneurScrollExtremes.className = 'tableau-scroll';
+      conteneurScrollExtremes.appendChild(tableauExtremes);
+      bloc.appendChild(conteneurScrollExtremes);
+    }
+
     zone.appendChild(bloc);
   });
 }
@@ -3479,7 +3575,14 @@ let chaussuresEnMemoire = [];
 function demarrerEcouteChaussures(uid) {
   return db.collection('users').doc(uid).collection('chaussures')
     .onSnapshot(function (snapshot) {
-      chaussuresEnMemoire = snapshot.docs.map(doc => doc.data());
+      // normaliserTypeActivite : même migration douce trail/route ->
+      // course_a_pied que pour les activités (23/09/2026), appliquée ici au
+      // "sport par défaut" d'une paire pour que la suggestion automatique
+      // continue de fonctionner sur une paire réglée avant ce changement.
+      chaussuresEnMemoire = snapshot.docs.map(doc => {
+        const donnees = doc.data();
+        return { ...donnees, sportParDefaut: normaliserTypeActivite(donnees.sportParDefaut) };
+      });
       afficherChaussures();
     }, function (erreur) {
       console.error('Erreur d\'écoute des chaussures :', erreur);
