@@ -390,6 +390,22 @@ h1 {
   cursor: pointer;
 }
 
+/* --- Filtre par type d'activité sur l'aperçu (22/09/2026) --- */
+.apercu-filtre label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+  color: #444;
+}
+
+.apercu-filtre select {
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  font-size: 1em;
+}
+
 /* --- Grille des statistiques --- */
 .stats-grid {
   display: grid;
