@@ -104,8 +104,29 @@
           <label><input type="checkbox" id="metrique-denivele"> D+ cumulé</label>
           <label><input type="checkbox" id="metrique-poids"> Poids</label>
         </div>
+        <!-- Filtre par type d'activité (22/09/2026) : limite Distance/Charge/
+             RPE/D+ à un seul type (ex. Trail), pour qu'une sortie d'un autre
+             sport (vélo, ski de fond...) ne vienne pas fausser la lecture du
+             sport principal. Sans effet sur le Poids (voir la note qui
+             apparaît juste en dessous une fois un filtre choisi). -->
+        <div class="apercu-filtre">
+          <label for="apercu-filtre-type">Filtrer par type d'activité
+            <select id="apercu-filtre-type">
+              <option value="">Tous les sports</option>
+              <option value="trail">Course à pied — Trail</option>
+              <option value="route">Course à pied — Route</option>
+              <option value="velo">Vélo</option>
+              <option value="natation">Natation</option>
+              <option value="tapis">Course sur tapis</option>
+              <option value="ski_fond">Ski de fond</option>
+              <option value="musculation">Musculation</option>
+              <option value="autre">Autre</option>
+            </select>
+          </label>
+        </div>
       </div>
       <p class="description">La période précédente (semaine/mois d'avant) s'affiche automatiquement en pointillé, dans la même couleur mais en transparence, pour comparer d'un coup d'œil. Contrairement aux autres courbes (cumulées sur la période), le Poids affiche la valeur réelle de la dernière pesée connue — à saisir dans Paramètres.</p>
+      <p id="apercu-filtre-note" class="description" style="display:none;"></p>
       <canvas id="chartApercu"></canvas>
     </section>
 
