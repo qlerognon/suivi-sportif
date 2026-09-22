@@ -46,6 +46,8 @@ let arreterEcouteReglages = null;
 let arreterEcouteVO2max = null;
 let arreterEcouteRecords = null;
 let arreterEcouteSegments = null;
+let arreterEcouteChaussures = null;
+let arreterEcoutePoids = null;
 
 auth.onAuthStateChanged(function (user) {
   if (user) {
@@ -59,6 +61,8 @@ auth.onAuthStateChanged(function (user) {
     arreterEcouteVO2max = demarrerEcouteVO2max(uidActuel);
     arreterEcouteRecords = demarrerEcouteRecords(uidActuel);
     arreterEcouteSegments = demarrerEcouteSegments(uidActuel);
+    arreterEcouteChaussures = demarrerEcouteChaussures(uidActuel);
+    arreterEcoutePoids = demarrerEcoutePoids(uidActuel);
   } else {
     // Déconnecté (ou pas encore connecté) : on coupe les écouteurs en cours
     // s'il y en avait, on vide l'état local, et on affiche l'écran de connexion.
@@ -67,10 +71,14 @@ auth.onAuthStateChanged(function (user) {
     if (arreterEcouteVO2max) arreterEcouteVO2max();
     if (arreterEcouteRecords) arreterEcouteRecords();
     if (arreterEcouteSegments) arreterEcouteSegments();
+    if (arreterEcouteChaussures) arreterEcouteChaussures();
+    if (arreterEcoutePoids) arreterEcoutePoids();
     uidActuel = null;
     activitesEnMemoire = [];
     recordsManuelsEnMemoire = [];
     segmentsEnMemoire = [];
+    chaussuresEnMemoire = [];
+    poidsEnMemoire = [];
 
     document.getElementById('app-principal').style.display = 'none';
     document.getElementById('ecran-connexion').style.display = 'block';
@@ -457,6 +465,8 @@ function parserTCX(xmlTexte) {
     deniveleDPlus: Math.round(deniveleDPlus),
     rpe: null, // ressenti (1-10) : pas encore renseigné à l'import, on le demande juste après
     nom: null, // nom donné par l'utilisateur (ex. "Sortie longue"), jamais dans le .tcx : saisi après coup, comme le RPE
+    typeActivite: null, // classification choisie par l'utilisateur (trail/route/vélo/...), voir TYPES_ACTIVITE : jamais devinée au-delà de typeParDefautDepuisSportBrut, saisie après coup comme le nom/RPE
+    chaussureId: null, // paire de chaussures attribuée à cette activité (voir section CHAUSSURES), modifiable après coup
     laps: laps, // détail par tour ("lap"), pour le tableau affiché dans le détail d'activité
     points: points // on garde le détail, utile pour la carte/graphiques plus tard
   };
@@ -471,24 +481,41 @@ function afficherActivite(activite) {
   sectionResultat.style.display = 'block';
 
   document.getElementById('stat-duree').textContent = formatDuree(activite.dureeSecondes);
-  document.getElementById('stat-distance').textContent = (activite.distanceMetres / 1000).toFixed(2) + ' km';
-  document.getElementById('stat-allure').textContent = formatAllure(activite.allureMinParKm) + ' /km';
-  const vapMoyenne = calculerVAPMoyenneActivite(activite.points);
-  document.getElementById('stat-vap').textContent = vapMoyenne !== null ? formatAllure(vapMoyenne) + ' /km' : 'N/A';
   document.getElementById('stat-fc').textContent = activite.fcMoyenne ? activite.fcMoyenne + ' bpm' : 'N/A';
-  document.getElementById('stat-denivele').textContent = activite.deniveleDPlus + ' m';
   document.getElementById('stat-calories').textContent = activite.calories + ' kcal';
   document.getElementById('stat-charge').textContent = formaterCharge(calculerCharge(activite));
   document.getElementById('stat-zone').textContent = formaterZone(calculerZone(activite.fcMoyenne));
 
-  // On retient l'id de cette activité, pour que le bouton "Enregistrer le
-  // ressenti" juste en dessous sache où sauvegarder. Le sélecteur reprend
-  // le RPE déjà enregistré s'il y en a un (utile quand cette fonction est
+  // La musculation n'a ni distance, ni allure, ni D+ (voir
+  // estSportSansDistance plus haut) : on cache ces cases plutôt que
+  // d'afficher des zéros trompeurs.
+  const sansDistance = estSportSansDistance(activite);
+  ['stat-card-distance', 'stat-card-allure', 'stat-card-vap', 'stat-card-denivele'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = sansDistance ? 'none' : '';
+  });
+  if (!sansDistance) {
+    document.getElementById('stat-distance').textContent = (activite.distanceMetres / 1000).toFixed(2) + ' km';
+    document.getElementById('stat-allure').textContent = formatAllure(activite.allureMinParKm) + ' /km';
+    const vapMoyenne = calculerVAPMoyenneActivite(activite.points);
+    document.getElementById('stat-vap').textContent = vapMoyenne !== null ? formatAllure(vapMoyenne) + ' /km' : 'N/A';
+    document.getElementById('stat-denivele').textContent = activite.deniveleDPlus + ' m';
+  }
+
+  // On retient l'id de cette activité, pour que les boutons "Enregistrer"
+  // juste en dessous sachent où sauvegarder. Les champs reprennent les
+  // valeurs déjà enregistrées s'il y en a (utile quand cette fonction est
   // appelée juste pour RÉAFFICHER la dernière activité, pas pour un import
-  // tout frais), sinon il reste vide.
+  // tout frais) ; le type d'activité, lui, se voit proposer une valeur par
+  // défaut UNIQUEMENT tant qu'il n'a jamais été renseigné (voir
+  // typeParDefautDepuisSportBrut : fiable seulement pour "Biking").
   derniereActiviteImporteeId = activite.id;
   document.getElementById('rpe-select').value = activite.rpe ? String(activite.rpe) : '';
   document.getElementById('nom-input').value = activite.nom || '';
+  document.getElementById('type-select').value = activite.typeActivite !== null
+    ? activite.typeActivite
+    : typeParDefautDepuisSportBrut(activite.sport);
+  remplirSelectChaussures('chaussure-select', activite.chaussureId, document.getElementById('type-select').value);
 }
 
 // --- Petites fonctions utilitaires de formatage ---
@@ -509,6 +536,68 @@ function formatAllure(minParKm) {
   const minutes = Math.floor(minParKm);
   const secondes = Math.round((minParKm - minutes) * 60);
   return minutes + ':' + secondes.toString().padStart(2, '0');
+}
+
+// ============================================================
+// TYPE D'ACTIVITÉ (22/09/2026) — sports au-delà de la course à pied "route"
+// (vélo, natation, tapis, ski de fond, musculation), et distinction
+// trail/route pour la course à pied elle-même. Un `.tcx` ne code presque
+// jamais cette distinction (l'attribut `Sport` d'origine ne connaît que des
+// valeurs génériques comme "Running"/"Biking"/"Other") : demandé à
+// l'utilisateur via un sélecteur juste après l'import (même principe que le
+// nom/RPE), modifiable à tout moment depuis le détail d'une activité.
+// `activite.sport` (valeur brute du .tcx) reste inchangé et toujours
+// disponible ; `activite.typeActivite` est la classification CHOISIE par
+// l'utilisateur (une des clés ci-dessous, ou `null` tant qu'elle n'a pas
+// encore été renseignée — y compris pour toute activité importée avant
+// l'ajout de cette fonctionnalité).
+// ============================================================
+
+const TYPES_ACTIVITE = [
+  { cle: 'trail', libelle: 'Course à pied — Trail' },
+  { cle: 'route', libelle: 'Course à pied — Route' },
+  { cle: 'velo', libelle: 'Vélo' },
+  { cle: 'natation', libelle: 'Natation' },
+  { cle: 'tapis', libelle: 'Course sur tapis' },
+  { cle: 'ski_fond', libelle: 'Ski de fond' },
+  { cle: 'musculation', libelle: 'Musculation' },
+  { cle: 'autre', libelle: 'Autre' }
+];
+
+function libelleType(cle) {
+  const info = TYPES_ACTIVITE.find(t => t.cle === cle);
+  return info ? info.libelle : cle;
+}
+
+// Libellé affiché pour une activité : sa classification si elle en a une,
+// sinon un intitulé de repli construit à partir du sport BRUT du .tcx (pour
+// que les activités importées avant cette fonctionnalité, ou pas encore
+// classées, restent lisibles dans le tableau/les records plutôt que de juste
+// disparaître ou afficher "null").
+function libelleTypeActivite(activite) {
+  if (activite.typeActivite) return libelleType(activite.typeActivite);
+  const brut = activite.sport || 'Autre';
+  if (brut === 'Running') return 'Course à pied (non classée)';
+  if (brut === 'Biking') return 'Vélo (non classé)';
+  return `${brut} (non classé)`;
+}
+
+// Pré-remplissage proposé du sélecteur de type juste après l'import : fiable
+// uniquement pour "Biking" (aucun autre sport de la liste n'est distingué
+// dans l'attribut Sport d'un .tcx) — dans tous les autres cas on laisse le
+// champ vide plutôt que de deviner (ex. "Running" ne dit pas si c'était du
+// trail ou de la route).
+function typeParDefautDepuisSportBrut(sportBrut) {
+  return sportBrut === 'Biking' ? 'velo' : '';
+}
+
+// La musculation n'a ni distance, ni allure, ni D+, ni tracé GPS — à la
+// différence de tous les autres sports de la liste (y compris le vélo/la
+// natation/le ski de fond, qui gardent le même affichage que la course pour
+// l'instant). Sert à cacher les champs/graphiques qui n'ont pas de sens pour
+// ce sport, plutôt que d'afficher des zéros trompeurs.
+function estSportSansDistance(activite) {
+  return activite.typeActivite === 'musculation';
 }
 
 // ============================================================
@@ -903,6 +992,67 @@ document.getElementById('btn-valider-detail-nom').addEventListener('click', func
 });
 
 // ============================================================
+// TYPE D'ACTIVITÉ (trail/route/vélo/natation/tapis/ski de fond/musculation/
+// autre) — voir TYPES_ACTIVITE plus haut. Même principe d'enregistrement que
+// le nom/RPE ci-dessus (saisi après coup, modifiable à tout moment).
+// ============================================================
+
+function enregistrerTypeActivite(idActivite, valeurType) {
+  const valeurNettoyee = valeurType === '' ? null : valeurType;
+  return db.collection('users').doc(uidActuel).collection('activites').doc(idActivite)
+    .update({ typeActivite: valeurNettoyee })
+    .then(() => valeurNettoyee)
+    .catch(erreur => {
+      console.error('Erreur d\'enregistrement du type d\'activité :', erreur);
+      throw erreur;
+    });
+}
+
+// Rafraîchit l'affichage (stats visibles/masquées selon le sport, suggestion
+// de chaussure) après un changement de type — sans attendre l'écriture
+// Firestore, pour une réaction immédiate au clic.
+document.getElementById('btn-valider-type').addEventListener('click', function () {
+  if (derniereActiviteImporteeId === null) return;
+  const valeur = document.getElementById('type-select').value;
+  const message = document.getElementById('type-message');
+  enregistrerTypeActivite(derniereActiviteImporteeId, valeur)
+    .then(valeurEnregistree => {
+      const idx = activitesEnMemoire.findIndex(a => a.id === derniereActiviteImporteeId);
+      if (idx !== -1) {
+        activitesEnMemoire[idx].typeActivite = valeurEnregistree;
+        afficherActivite(activitesEnMemoire[idx]); // rafraîchit les champs masqués/chaussure suggérée
+      }
+      message.textContent = '✅ Type enregistré.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+document.getElementById('btn-valider-detail-type').addEventListener('click', function () {
+  if (activiteEnCoursAffichage === null) return;
+  const act = activitesEnMemoire[activiteEnCoursAffichage];
+  if (!act) return;
+  const valeur = document.getElementById('detail-type-select').value;
+  const message = document.getElementById('detail-type-message');
+  enregistrerTypeActivite(act.id, valeur)
+    .then(valeurEnregistree => {
+      act.typeActivite = valeurEnregistree;
+      rafraichirDetailActivite(activiteEnCoursAffichage); // rafraîchit sans rouvrir/refermer le panneau
+      message.textContent = '✅ Type enregistré.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+// ============================================================
 // APERÇU SEMAINE / MOIS (page Accueil)
 // Affiche, jour par jour sur la semaine ou le mois en cours, des courbes
 // CUMULATIVES (somme depuis le début de la période) des métriques que
@@ -958,8 +1108,35 @@ function formaterLabelPeriode(periode, debut, fin) {
   return `Semaine du ${debut.toLocaleDateString('fr-FR', opts)} au ${fin.toLocaleDateString('fr-FR', opts)}`;
 }
 
+// Construit, jour par jour sur la période, la série du POIDS (kg) — voir la
+// section POIDS plus bas. Contrairement aux 4 autres métriques, ce n'est PAS
+// une somme cumulative (ça n'aurait aucun sens d'"additionner" des pesées) :
+// pour chaque jour, on reprend la DERNIÈRE pesée connue à cette date ou
+// avant (report de la dernière valeur), y compris une pesée antérieure au
+// début de la période. `null` tant qu'aucune pesée n'a encore été saisie —
+// Chart.js laisse alors un simple trou dans la courbe plutôt que de tracer
+// un zéro trompeur.
+function calculerSeriePoids(nbJours, debut) {
+  const poidsTries = [...poidsEnMemoire].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const poidsParJour = [];
+  let curseur = 0; // avance une seule fois, les jours et les pesées triées étant tous deux croissants
+  let dernierPoids = null;
+  for (let i = 0; i < nbJours; i++) {
+    const finJour = new Date(debut);
+    finJour.setDate(finJour.getDate() + i);
+    finJour.setHours(23, 59, 59, 999);
+    while (curseur < poidsTries.length && new Date(poidsTries[curseur].date) <= finJour) {
+      dernierPoids = poidsTries[curseur].poidsKg;
+      curseur++;
+    }
+    poidsParJour.push(dernierPoids);
+  }
+  return poidsParJour;
+}
+
 // Construit, jour par jour sur la période, les séries CUMULATIVES des 4
-// métriques sélectionnables.
+// métriques sélectionnables (+ la série du poids, non cumulative, voir
+// calculerSeriePoids ci-dessus).
 function calculerSeriesApercu(periode, offset = 0) {
   const { debut, fin } = obtenirBornesPeriode(periode, offset);
 
@@ -1006,7 +1183,8 @@ function calculerSeriesApercu(periode, offset = 0) {
     distance: cumuler(distanceParJour),
     charge: cumuler(chargeParJour),
     rpe: cumuler(rpeParJour),
-    denivele: cumuler(deniveleParJour)
+    denivele: cumuler(deniveleParJour),
+    poids: calculerSeriePoids(nbJours, debut)
   };
 }
 
@@ -1016,8 +1194,35 @@ const METRIQUES_APERCU = [
   { cle: 'distance', idCase: 'metrique-distance', libelle: 'Distance cumulée (km)', couleur: 'rgb(75, 192, 192)', axe: 'yDistance' },
   { cle: 'charge', idCase: 'metrique-charge', libelle: 'Charge cumulée (TRIMP)', couleur: 'rgb(255, 99, 132)', axe: 'yCharge' },
   { cle: 'rpe', idCase: 'metrique-rpe', libelle: 'RPE cumulé', couleur: 'rgb(255, 159, 64)', axe: 'yRpe' },
-  { cle: 'denivele', idCase: 'metrique-denivele', libelle: 'D+ cumulé (m)', couleur: 'rgb(153, 102, 255)', axe: 'yDenivele' }
+  { cle: 'denivele', idCase: 'metrique-denivele', libelle: 'D+ cumulé (m)', couleur: 'rgb(153, 102, 255)', axe: 'yDenivele' },
+  // Poids : seule métrique NON cumulative de la liste (voir calculerSeriePoids)
+  // — le libellé ne dit pas "cumulé" pour cette raison. Réutilise exactement
+  // le même mécanisme générique (case à cocher, axe Y dédié, superposition de
+  // la période précédente) que les 4 métriques ci-dessus, sans code séparé.
+  { cle: 'poids', idCase: 'metrique-poids', libelle: 'Poids (kg)', couleur: 'rgb(46, 204, 113)', axe: 'yPoids' }
 ];
+
+// Convertit une couleur "rgb(r, g, b)" (voir METRIQUES_APERCU) en
+// "rgba(r, g, b, alpha)" — utilisé pour la courbe de la période PRÉCÉDENTE
+// (même couleur que la métrique, mais en transparence, voir afficherApercu).
+function couleurTransparente(rgbString, alpha) {
+  const m = rgbString.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (!m) return rgbString;
+  return `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${alpha})`;
+}
+
+// Aligne une série (tableau de valeurs CUMULATIVES) sur `longueurCible`
+// points : tronquée si elle est plus longue (ex. mois précédent plus long
+// que le mois en cours), complétée en répétant sa DERNIÈRE valeur si elle
+// est plus courte (ex. mois précédent plus court : la courbe reste "à plat"
+// sur les derniers jours, cohérent avec un cumul qui n'a plus bougé). Sert à
+// superposer la période précédente à la période en cours malgré un nombre de
+// jours parfois différent (mois de longueurs inégales).
+function alignerSeriesSurLongueur(valeurs, longueurCible) {
+  if (valeurs.length >= longueurCible) return valeurs.slice(0, longueurCible);
+  const derniereValeur = valeurs.length > 0 ? valeurs[valeurs.length - 1] : 0;
+  return valeurs.concat(new Array(longueurCible - valeurs.length).fill(derniereValeur));
+}
 
 function afficherApercu() {
   const canvas = document.getElementById('chartApercu');
@@ -1027,6 +1232,10 @@ function afficherApercu() {
 
   const { debut, fin } = obtenirBornesPeriode(periodeApercuActuelle, offsetPeriodeApercu);
   const series = calculerSeriesApercu(periodeApercuActuelle, offsetPeriodeApercu);
+  // Période précédente (offset - 1), affichée en transparence pour
+  // comparaison (demande de l'utilisateur du 22/09/2026) : toujours
+  // affichée dès qu'une métrique est cochée, sans réglage à activer.
+  const seriesPrecedente = calculerSeriesApercu(periodeApercuActuelle, offsetPeriodeApercu - 1);
 
   // Libellé de la période affichée + état des boutons de navigation
   const labelPeriode = document.getElementById('apercu-periode-label');
@@ -1054,6 +1263,24 @@ function afficherApercu() {
       backgroundColor: metrique.couleur,
       borderWidth: 2,
       pointRadius: 3,
+      tension: 0.15,
+      hidden: !active,
+      yAxisID: metrique.axe
+    });
+
+    // Courbe de la période précédente : même métrique, même axe, mais en
+    // pointillé et en transparence (couleurTransparente) pour rester
+    // lisiblement "derrière" la période en cours plutôt que de s'y
+    // confondre. Alignée sur le même nombre de points (alignerSeriesSurLongueur)
+    // même si la période précédente avait un nombre de jours différent (mois).
+    datasets.push({
+      label: metrique.libelle + ' (période précédente)',
+      data: alignerSeriesSurLongueur(seriesPrecedente[metrique.cle], series.labels.length),
+      borderColor: couleurTransparente(metrique.couleur, 0.4),
+      backgroundColor: couleurTransparente(metrique.couleur, 0.4),
+      borderWidth: 2,
+      borderDash: [6, 4],
+      pointRadius: 0,
       tension: 0.15,
       hidden: !active,
       yAxisID: metrique.axe
@@ -1893,6 +2120,7 @@ function rafraichirAffichageActivites() {
   afficherRecapSemaines();
   afficherGraphiqueACWR();
   afficherRecordsAutomatiques();
+  afficherChaussures(); // le km cumulé de chaque paire dépend des activités
   remplirSelectActiviteLiee();
   remplirSelectActiviteSourceSegment();
   // Les segments eux-mêmes (voir plus bas) ne sont PAS recalculés ici : trop
@@ -1966,7 +2194,7 @@ let triOrdre = 'desc'; // 'asc' ou 'desc'
 const COMPARATEURS_TRI = {
   date: act => new Date(act.date).getTime(),
   nom: act => (act.nom || '').toLowerCase(),
-  sport: act => (act.sport || '').toLowerCase(),
+  sport: act => libelleTypeActivite(act).toLowerCase(),
   distance: act => act.distanceMetres,
   duree: act => act.dureeSecondes,
   allure: act => act.allureMinParKm,
@@ -2008,13 +2236,14 @@ function dessinerTableauActivites() {
     const ligne = document.createElement('tr');
     ligne.style.cursor = 'pointer'; // curseur "main" au survol, pour indiquer que c'est cliquable
     const charge = calculerCharge(act);
+    const sansDistance = estSportSansDistance(act);
     ligne.innerHTML = `
       <td>${formatDate(act.date)}</td>
       <td>${act.nom ? act.nom : '<span class="texte-attenue">Sans nom</span>'}</td>
-      <td>${act.sport}</td>
-      <td>${(act.distanceMetres / 1000).toFixed(2)} km</td>
+      <td>${act.typeActivite ? libelleTypeActivite(act) : '<span class="texte-attenue">' + libelleTypeActivite(act) + '</span>'}</td>
+      <td>${sansDistance ? 'N/A' : (act.distanceMetres / 1000).toFixed(2) + ' km'}</td>
       <td>${formatDuree(act.dureeSecondes)}</td>
-      <td>${formatAllure(act.allureMinParKm)} /km</td>
+      <td>${sansDistance ? 'N/A' : formatAllure(act.allureMinParKm) + ' /km'}</td>
       <td>${act.fcMoyenne ? act.fcMoyenne + ' bpm' : 'N/A'}</td>
       <td>${charge !== null ? charge : 'N/A'}</td>
       <td>${act.rpe ? act.rpe + '/10' : '--'}</td>
@@ -2143,7 +2372,7 @@ function afficherTableauLaps(activite) {
 // ============================================================
 function afficherDetailActivite(index) {
   const panneauDetail = document.getElementById('detail-activite');
-  
+
   // Si le panneau est déjà affiché ET c'est la même activité, on le ferme
   if (panneauDetail.style.display === 'block' && activiteEnCoursAffichage === index) {
     panneauDetail.style.display = 'none';
@@ -2153,36 +2382,62 @@ function afficherDetailActivite(index) {
 
   // Sinon, on affiche l'activité cliquée
   activiteEnCoursAffichage = index;
-  const act = activitesEnMemoire[index];
-  if (!act) return;
+  if (!activitesEnMemoire[index]) return;
 
   panneauDetail.style.display = 'block';
+  rafraichirDetailActivite(index);
+  panneauDetail.scrollIntoView({ behavior: 'smooth' });
+}
+
+// Redessine le CONTENU du panneau de détail pour l'activité `index`, SANS
+// toucher à son ouverture/fermeture ni faire défiler la page — utilisé par
+// afficherDetailActivite() ci-dessus à l'ouverture, et par les
+// enregistrements nom/type/chaussure (voir plus haut) pour rafraîchir
+// l'affichage (champs masqués selon le sport, suggestion de chaussure...)
+// après une modification, sans rouvrir/refermer le panneau.
+function rafraichirDetailActivite(index) {
+  const act = activitesEnMemoire[index];
+  if (!act) return;
 
   document.getElementById('detail-titre').textContent = act.nom
     ? `${act.nom} — ${formatDate(act.date)}`
     : `Détail de l'activité du ${formatDate(act.date)}`;
   document.getElementById('detail-nom-input').value = act.nom || '';
+  document.getElementById('detail-type-select').value = act.typeActivite || '';
   document.getElementById('detail-date').textContent = formatDate(act.date);
   document.getElementById('detail-sport').textContent = act.sport;
-  document.getElementById('detail-distance').textContent = (act.distanceMetres / 1000).toFixed(2) + ' km';
   document.getElementById('detail-duree').textContent = formatDuree(act.dureeSecondes);
-  document.getElementById('detail-allure').textContent = formatAllure(act.allureMinParKm) + ' /km';
-  const vapMoyenneDetail = calculerVAPMoyenneActivite(act.points);
-  document.getElementById('detail-vap').textContent = vapMoyenneDetail !== null ? formatAllure(vapMoyenneDetail) + ' /km' : 'N/A';
   document.getElementById('detail-fc').textContent = act.fcMoyenne ? act.fcMoyenne + ' bpm' : 'N/A';
-  document.getElementById('detail-denivele').textContent = act.deniveleDPlus + ' m';
   document.getElementById('detail-calories').textContent = act.calories + ' kcal';
   document.getElementById('detail-charge').textContent = formaterCharge(calculerCharge(act));
   document.getElementById('detail-zone').textContent = formaterZone(calculerZone(act.fcMoyenne));
   document.getElementById('detail-rpe-select').value = act.rpe ? String(act.rpe) : '';
+  remplirSelectChaussures('detail-chaussure-select', act.chaussureId, act.typeActivite);
+
+  // La musculation n'a ni distance, ni allure, ni D+, ni tracé GPS : on
+  // cache les blocs qui n'ont pas de sens pour ce sport plutôt que
+  // d'afficher des zéros trompeurs (voir estSportSansDistance plus haut).
+  const sansDistance = estSportSansDistance(act);
+  ['detail-p-distance', 'detail-p-allure', 'detail-p-vap', 'detail-p-denivele', 'detail-bloc-carte', 'detail-bloc-graph-denivele', 'detail-bloc-graph-allure'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = sansDistance ? 'none' : '';
+  });
+
+  if (!sansDistance) {
+    document.getElementById('detail-distance').textContent = (act.distanceMetres / 1000).toFixed(2) + ' km';
+    document.getElementById('detail-allure').textContent = formatAllure(act.allureMinParKm) + ' /km';
+    const vapMoyenneDetail = calculerVAPMoyenneActivite(act.points);
+    document.getElementById('detail-vap').textContent = vapMoyenneDetail !== null ? formatAllure(vapMoyenneDetail) + ' /km' : 'N/A';
+    document.getElementById('detail-denivele').textContent = act.deniveleDPlus + ' m';
+  }
 
   afficherTableauLaps(act);
-  afficherCarte(act);
-  afficherGraphiqueDenivele(act.points);
-  afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps);
   afficherGraphiqueFC(act.points, act.dureeSecondes);
-
-  panneauDetail.scrollIntoView({ behavior: 'smooth' });
+  if (!sansDistance) {
+    afficherCarte(act);
+    afficherGraphiqueDenivele(act.points);
+    afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps);
+  }
 }
 
 // ============================================================
@@ -2489,28 +2744,33 @@ function meilleurTempsPourDistance(activite, distanceCibleMetres) {
   return meilleurDuree !== null ? Math.round(meilleurDuree) : null;
 }
 
-// Parcourt TOUTES les activités connues et calcule, pour chaque sport et
-// chaque distance standard, le meilleur temps trouvé (et dans quelle
-// activité). Renvoie une Map : sport -> Map(cle distance -> { distanceInfo,
-// dureeSecondes, activite }).
+// Parcourt TOUTES les activités connues et calcule, pour chaque TYPE
+// d'activité (trail/route/vélo/... — voir libelleTypeActivite, qui regroupe
+// par la classification choisie par l'utilisateur, avec un intitulé de
+// repli pour les activités pas encore classées) et chaque distance standard,
+// le meilleur temps trouvé (et dans quelle activité). La musculation est
+// exclue (pas de distance parcourue). Renvoie une Map : libellé de type ->
+// Map(cle distance -> { distanceInfo, dureeSecondes, activite }).
 function calculerRecordsAutomatiques() {
-  const parSport = new Map();
+  const parType = new Map();
 
   activitesEnMemoire.forEach(activite => {
+    if (estSportSansDistance(activite)) return;
+    const libelle = libelleTypeActivite(activite);
     DISTANCES_RECORDS.forEach(distanceInfo => {
       const duree = meilleurTempsPourDistance(activite, distanceInfo.metres);
       if (duree === null) return;
 
-      if (!parSport.has(activite.sport)) parSport.set(activite.sport, new Map());
-      const recordsSport = parSport.get(activite.sport);
-      const recordActuel = recordsSport.get(distanceInfo.cle);
+      if (!parType.has(libelle)) parType.set(libelle, new Map());
+      const recordsType = parType.get(libelle);
+      const recordActuel = recordsType.get(distanceInfo.cle);
       if (!recordActuel || duree < recordActuel.dureeSecondes) {
-        recordsSport.set(distanceInfo.cle, { distanceInfo, dureeSecondes: duree, activite });
+        recordsType.set(distanceInfo.cle, { distanceInfo, dureeSecondes: duree, activite });
       }
     });
   });
 
-  return parSport;
+  return parType;
 }
 
 // Ouvre le détail d'une activité à partir de son ID (pas de sa position dans
@@ -2545,9 +2805,9 @@ function afficherRecordsAutomatiques() {
     return;
   }
 
-  const parSport = calculerRecordsAutomatiques();
+  const parType = calculerRecordsAutomatiques();
 
-  if (parSport.size === 0) {
+  if (parType.size === 0) {
     zone.innerHTML = '';
     message.textContent = "Aucun record détecté pour l'instant : il faut au moins une activité couvrant entièrement une des distances standards (1 km, 5 km, 10 km, semi ou marathon).";
     message.style.display = 'block';
@@ -2557,14 +2817,14 @@ function afficherRecordsAutomatiques() {
   message.style.display = 'none';
   zone.innerHTML = '';
 
-  [...parSport.keys()].sort().forEach(sport => {
-    const recordsSport = parSport.get(sport);
+  [...parType.keys()].sort().forEach(libelle => {
+    const recordsType = parType.get(libelle);
 
     const bloc = document.createElement('div');
     bloc.className = 'records-bloc-sport';
 
     const titre = document.createElement('h3');
-    titre.textContent = sport;
+    titre.textContent = libelle;
     bloc.appendChild(titre);
 
     const tableau = document.createElement('table');
@@ -2572,7 +2832,7 @@ function afficherRecordsAutomatiques() {
     const corps = document.createElement('tbody');
 
     DISTANCES_RECORDS.forEach(distanceInfo => {
-      const record = recordsSport.get(distanceInfo.cle);
+      const record = recordsType.get(distanceInfo.cle);
       if (!record) return;
 
       const allureMinParKm = (record.dureeSecondes / 60) / (distanceInfo.metres / 1000);
@@ -3140,3 +3400,348 @@ function afficherSegments() {
     zone.appendChild(bloc);
   });
 }
+
+// ============================================================
+// CHAUSSURES (22/09/2026) — suivi d'usure : marque/modèle, sport par défaut
+// (pour la suggestion automatique lors du rattachement à une activité, voir
+// suggererChaussurePourType), et un seuil d'alerte en km. Le kilométrage
+// cumulé d'une paire n'est JAMAIS stocké : il est recalculé à la volée à
+// partir des activités qui lui sont rattachées (`activite.chaussureId`),
+// même principe que la charge TRIMP (toujours recalculée, jamais figée).
+// Stocké dans Firestore (users/{uid}/chaussures/{id}).
+// ============================================================
+
+let chaussuresEnMemoire = [];
+
+// Écoute Firestore en continu (voir demarrerEcouteReglages plus haut pour le
+// même principe en détail).
+function demarrerEcouteChaussures(uid) {
+  return db.collection('users').doc(uid).collection('chaussures')
+    .onSnapshot(function (snapshot) {
+      chaussuresEnMemoire = snapshot.docs.map(doc => doc.data());
+      afficherChaussures();
+    }, function (erreur) {
+      console.error('Erreur d\'écoute des chaussures :', erreur);
+    });
+}
+
+// Kilométrage cumulé d'une paire : somme des distances de TOUTES les
+// activités qui lui sont actuellement rattachées (recalculé à chaque appel,
+// jamais stocké — voir plus haut).
+function calculerKmChaussure(chaussureId) {
+  return activitesEnMemoire
+    .filter(act => act.chaussureId === chaussureId)
+    .reduce((total, act) => total + act.distanceMetres / 1000, 0);
+}
+
+// Suggère automatiquement une paire lors du rattachement d'une activité à
+// son type : seulement s'il existe EXACTEMENT une paire ACTIVE dont le
+// "sport par défaut" correspond — en cas d'ambiguïté (plusieurs paires
+// possibles, ou aucune), on laisse le champ vide plutôt que de deviner.
+// Cette suggestion n'est jamais enregistrée toute seule : l'utilisateur
+// garde la main via le sélecteur (et peut la changer avant de valider).
+function suggererChaussurePourType(typeActivite) {
+  if (!typeActivite) return null;
+  const candidates = chaussuresEnMemoire.filter(c => c.active !== false && c.sportParDefaut === typeActivite);
+  return candidates.length === 1 ? candidates[0].id : null;
+}
+
+// Remplit un <select> de chaussures (post-import ou détail) avec la liste
+// actuelle des paires connues, et sélectionne : la valeur déjà enregistrée
+// sur l'activité si elle en a une, sinon la suggestion automatique ci-dessus,
+// sinon rien ("-- aucune --").
+function remplirSelectChaussures(idSelect, valeurActuelle, typeActiviteActuel) {
+  const select = document.getElementById(idSelect);
+  if (!select) return;
+  const options = ['<option value="">-- aucune --</option>'];
+  chaussuresEnMemoire.forEach(c => {
+    options.push(`<option value="${c.id}">${c.marque} ${c.modele}${c.active === false ? ' (retraitée)' : ''}</option>`);
+  });
+  select.innerHTML = options.join('');
+  select.value = valeurActuelle || suggererChaussurePourType(typeActiviteActuel) || '';
+}
+
+// Met à jour le champ "chaussure" d'une activité déjà enregistrée dans
+// Firestore — même principe que enregistrerNom/enregistrerTypeActivite
+// ci-dessus.
+function enregistrerChaussure(idActivite, valeurChaussureId) {
+  const valeurNettoyee = valeurChaussureId === '' ? null : valeurChaussureId;
+  return db.collection('users').doc(uidActuel).collection('activites').doc(idActivite)
+    .update({ chaussureId: valeurNettoyee })
+    .then(() => valeurNettoyee)
+    .catch(erreur => {
+      console.error('Erreur d\'enregistrement de la chaussure :', erreur);
+      throw erreur;
+    });
+}
+
+document.getElementById('btn-valider-chaussure').addEventListener('click', function () {
+  if (derniereActiviteImporteeId === null) return;
+  const valeur = document.getElementById('chaussure-select').value;
+  const message = document.getElementById('chaussure-message');
+  enregistrerChaussure(derniereActiviteImporteeId, valeur)
+    .then(valeurEnregistree => {
+      const idx = activitesEnMemoire.findIndex(a => a.id === derniereActiviteImporteeId);
+      if (idx !== -1) activitesEnMemoire[idx].chaussureId = valeurEnregistree;
+      afficherChaussures(); // le km cumulé de la paire vient de changer
+      message.textContent = '✅ Chaussure enregistrée.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+document.getElementById('btn-valider-detail-chaussure').addEventListener('click', function () {
+  if (activiteEnCoursAffichage === null) return;
+  const act = activitesEnMemoire[activiteEnCoursAffichage];
+  if (!act) return;
+  const valeur = document.getElementById('detail-chaussure-select').value;
+  const message = document.getElementById('detail-chaussure-message');
+  enregistrerChaussure(act.id, valeur)
+    .then(valeurEnregistree => {
+      act.chaussureId = valeurEnregistree;
+      afficherChaussures(); // le km cumulé de la paire vient de changer
+      message.textContent = '✅ Chaussure enregistrée.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+// Suggestion automatique de chaussure dès qu'on change le type d'activité
+// (avant même d'enregistrer) — seulement si le champ chaussure est encore
+// vide, pour ne jamais écraser un choix déjà fait par l'utilisateur.
+document.getElementById('type-select').addEventListener('change', function () {
+  const selectChaussure = document.getElementById('chaussure-select');
+  if (selectChaussure && selectChaussure.value === '') {
+    remplirSelectChaussures('chaussure-select', null, this.value);
+  }
+});
+document.getElementById('detail-type-select').addEventListener('change', function () {
+  const selectChaussure = document.getElementById('detail-chaussure-select');
+  if (selectChaussure && selectChaussure.value === '') {
+    remplirSelectChaussures('detail-chaussure-select', null, this.value);
+  }
+});
+
+// --- Gestion des paires (page Paramètres) : ajout / retrait / suppression ---
+
+function ajouterChaussure(donnees) {
+  // Id généré côté client (même convention que les records manuels/segments
+  // ci-dessus) plutôt qu'un id Firestore auto-généré.
+  const id = 'chaussure-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  const chaussure = {
+    id,
+    marque: donnees.marque,
+    modele: donnees.modele,
+    sportParDefaut: donnees.sportParDefaut || null,
+    seuilAlerteKm: donnees.seuilAlerteKm,
+    active: true
+  };
+  return db.collection('users').doc(uidActuel).collection('chaussures').doc(id).set(chaussure);
+}
+
+function supprimerChaussure(id) {
+  db.collection('users').doc(uidActuel).collection('chaussures').doc(id).delete()
+    .catch(erreur => console.error('Erreur de suppression de la chaussure :', erreur));
+}
+
+// "Retirer"/"Réactiver" une paire : une paire retraitée n'est plus proposée
+// par la suggestion automatique (suggererChaussurePourType), mais reste
+// visible et sélectionnable manuellement (son historique de km n'est pas
+// perdu) — pour une paire qu'on ne porte plus mais qu'on veut garder en
+// référence.
+function basculerActiveChaussure(chaussure) {
+  const active = chaussure.active !== false;
+  db.collection('users').doc(uidActuel).collection('chaussures').doc(chaussure.id)
+    .update({ active: !active })
+    .catch(erreur => console.error('Erreur de mise à jour de la chaussure :', erreur));
+}
+
+// Reconstruit le tableau des chaussures (page Paramètres). Appelée par
+// l'écouteur Firestore des chaussures ET par rafraichirAffichageActivites()
+// (le km cumulé affiché dépend des activités, pas seulement des paires).
+function afficherChaussures() {
+  const corps = document.getElementById('corps-tableau-chaussures');
+  const message = document.getElementById('chaussures-message');
+  if (!corps) return; // sécurité si la page n'est pas encore chargée
+
+  if (chaussuresEnMemoire.length === 0) {
+    corps.innerHTML = '';
+    if (message) message.style.display = 'block';
+    return;
+  }
+  if (message) message.style.display = 'none';
+
+  corps.innerHTML = '';
+  chaussuresEnMemoire.forEach(chaussure => {
+    const km = calculerKmChaussure(chaussure.id);
+    const seuil = chaussure.seuilAlerteKm || null;
+    const seuilDepasse = seuil !== null && km >= seuil;
+    const active = chaussure.active !== false;
+
+    const ligne = document.createElement('tr');
+    ligne.innerHTML = `
+      <td>${chaussure.marque}</td>
+      <td>${chaussure.modele}</td>
+      <td>${chaussure.sportParDefaut ? libelleType(chaussure.sportParDefaut) : '<span class="texte-attenue">Tous sports</span>'}</td>
+      <td class="${seuilDepasse ? 'texte-alerte' : ''}">${km.toFixed(0)} km${seuil !== null ? ' / ' + seuil + ' km' : ''}${seuilDepasse ? ' ⚠️ Seuil dépassé' : ''}</td>
+      <td>${active ? 'Active' : '<span class="texte-attenue">Retraitée</span>'}</td>
+      <td>
+        <button type="button" class="bouton-secondaire bouton-basculer-chaussure">${active ? 'Retirer' : 'Réactiver'}</button>
+        <button type="button" class="bouton-danger bouton-supprimer-chaussure" title="Supprimer définitivement">🗑️</button>
+      </td>
+    `;
+    ligne.querySelector('.bouton-basculer-chaussure').addEventListener('click', () => basculerActiveChaussure(chaussure));
+    ligne.querySelector('.bouton-supprimer-chaussure').addEventListener('click', () => {
+      const confirmation = confirm(`Supprimer définitivement la paire "${chaussure.marque} ${chaussure.modele}" ? Cette action est irréversible (les activités déjà rattachées à cette paire ne sont pas supprimées, mais ne sauront plus à quelle paire elles étaient rattachées).`);
+      if (confirmation) supprimerChaussure(chaussure.id);
+    });
+    corps.appendChild(ligne);
+  });
+}
+
+document.getElementById('btn-ajouter-chaussure').addEventListener('click', function () {
+  const marque = document.getElementById('chaussure-marque').value.trim();
+  const modele = document.getElementById('chaussure-modele').value.trim();
+  const sportParDefaut = document.getElementById('chaussure-sport-defaut').value;
+  const seuilSaisi = parseFloat(document.getElementById('chaussure-seuil').value);
+  const seuilAlerteKm = Number.isFinite(seuilSaisi) && seuilSaisi > 0 ? seuilSaisi : 800; // 800 km : repère d'usure courant pour une chaussure de course
+  const message = document.getElementById('chaussures-form-message');
+
+  if (!marque || !modele) {
+    message.textContent = '⚠️ La marque et le modèle sont obligatoires.';
+    message.style.display = 'block';
+    return;
+  }
+
+  ajouterChaussure({ marque, modele, sportParDefaut, seuilAlerteKm })
+    .then(() => {
+      document.getElementById('chaussure-marque').value = '';
+      document.getElementById('chaussure-modele').value = '';
+      document.getElementById('chaussure-sport-defaut').value = '';
+      document.getElementById('chaussure-seuil').value = '';
+      message.textContent = '✅ Chaussure ajoutée.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+// ============================================================
+// POIDS (22/09/2026) — suivi du poids à des dates choisies librement par
+// l'utilisateur (pas de rythme imposé), et croisement avec la performance
+// sportive : la courbe de poids vient s'ajouter aux 4 métriques déjà
+// sélectionnables sur l'aperçu de l'Accueil (voir METRIQUES_APERCU et
+// calculerSeriePoids plus haut), avec la même superposition de la période
+// précédente que les autres. Stocké dans Firestore (users/{uid}/poids/{id}).
+// ============================================================
+
+let poidsEnMemoire = [];
+
+// Écoute Firestore en continu (même principe que demarrerEcouteChaussures).
+// On redessine aussi le graphique d'aperçu de l'Accueil (afficherApercu) à
+// chaque changement : une pesée ajoutée/supprimée sur un autre appareil doit
+// se refléter immédiatement dans la courbe "Poids" si elle est affichée.
+function demarrerEcoutePoids(uid) {
+  return db.collection('users').doc(uid).collection('poids')
+    .onSnapshot(function (snapshot) {
+      poidsEnMemoire = snapshot.docs.map(doc => doc.data());
+      afficherPoids();
+      afficherApercu();
+    }, function (erreur) {
+      console.error('Erreur d\'écoute du poids :', erreur);
+    });
+}
+
+// Une pesée est enregistrée à midi (12:00) le jour choisi plutôt qu'à minuit
+// pile : ça évite qu'un décalage de fuseau horaire ne la fasse basculer sur
+// la veille ou le lendemain lors des comparaisons de date ailleurs dans le
+// code (voir calculerSeriePoids) — un poids n'a de toute façon pas d'heure
+// précise dans la journée, contrairement à une activité.
+function ajouterPoids(donnees) {
+  const id = 'poids-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  const poids = {
+    id,
+    date: new Date(donnees.dateSaisie + 'T12:00:00').toISOString(),
+    poidsKg: donnees.poidsKg
+  };
+  return db.collection('users').doc(uidActuel).collection('poids').doc(id).set(poids);
+}
+
+function supprimerPoids(id) {
+  db.collection('users').doc(uidActuel).collection('poids').doc(id).delete()
+    .catch(erreur => console.error('Erreur de suppression du poids :', erreur));
+}
+
+// Reconstruit le tableau des pesées (page Paramètres), la plus récente en
+// premier — même convention que les records manuels.
+function afficherPoids() {
+  const corps = document.getElementById('corps-tableau-poids');
+  const message = document.getElementById('poids-message');
+  if (!corps) return; // sécurité si la page n'est pas encore chargée
+
+  if (poidsEnMemoire.length === 0) {
+    corps.innerHTML = '';
+    if (message) message.style.display = 'block';
+    return;
+  }
+  if (message) message.style.display = 'none';
+
+  const poidsTries = [...poidsEnMemoire].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  corps.innerHTML = '';
+  poidsTries.forEach(entree => {
+    const ligne = document.createElement('tr');
+    ligne.innerHTML = `
+      <td>${new Date(entree.date).toLocaleDateString('fr-FR')}</td>
+      <td>${entree.poidsKg} kg</td>
+      <td><button type="button" class="bouton-danger bouton-supprimer-poids" title="Supprimer">🗑️</button></td>
+    `;
+    ligne.querySelector('.bouton-supprimer-poids').addEventListener('click', () => {
+      const confirmation = confirm(`Supprimer la pesée du ${new Date(entree.date).toLocaleDateString('fr-FR')} (${entree.poidsKg} kg) ?`);
+      if (confirmation) supprimerPoids(entree.id);
+    });
+    corps.appendChild(ligne);
+  });
+}
+
+document.getElementById('btn-ajouter-poids').addEventListener('click', function () {
+  const dateSaisie = document.getElementById('poids-date').value;
+  const poidsSaisi = parseFloat(document.getElementById('poids-valeur').value);
+  const message = document.getElementById('poids-form-message');
+
+  if (!dateSaisie || !Number.isFinite(poidsSaisi) || poidsSaisi <= 0) {
+    message.textContent = '⚠️ Renseigne une date et un poids valide (en kg).';
+    message.style.display = 'block';
+    return;
+  }
+
+  ajouterPoids({ dateSaisie, poidsKg: poidsSaisi })
+    .then(() => {
+      document.getElementById('poids-valeur').value = '';
+      message.textContent = '✅ Pesée enregistrée.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+// Date du jour pré-remplie par défaut dans le formulaire (saisie la plus
+// fréquente), modifiable librement pour une pesée d'un autre jour.
+(function initialiserDatePoids() {
+  const champDate = document.getElementById('poids-date');
+  if (champDate) champDate.valueAsDate = new Date();
+})();
