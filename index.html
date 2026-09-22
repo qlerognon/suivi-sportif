@@ -102,8 +102,10 @@
           <label><input type="checkbox" id="metrique-charge" checked> Charge cumulée</label>
           <label><input type="checkbox" id="metrique-rpe"> RPE cumulé</label>
           <label><input type="checkbox" id="metrique-denivele"> D+ cumulé</label>
+          <label><input type="checkbox" id="metrique-poids"> Poids</label>
         </div>
       </div>
+      <p class="description">La période précédente (semaine/mois d'avant) s'affiche automatiquement en pointillé, dans la même couleur mais en transparence, pour comparer d'un coup d'œil. Contrairement aux autres courbes (cumulées sur la période), le Poids affiche la valeur réelle de la dernière pesée connue — à saisir dans Paramètres.</p>
       <canvas id="chartApercu"></canvas>
     </section>
 
@@ -162,15 +164,15 @@
           <span class="stat-label">Durée</span>
           <span class="stat-value" id="stat-duree">--</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="stat-card-distance">
           <span class="stat-label">Distance</span>
           <span class="stat-value" id="stat-distance">--</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="stat-card-allure">
           <span class="stat-label">Allure moyenne</span>
           <span class="stat-value" id="stat-allure">--</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="stat-card-vap">
           <span class="stat-label">VAP moyenne</span>
           <span class="stat-value" id="stat-vap">--</span>
         </div>
@@ -178,7 +180,7 @@
           <span class="stat-label">FC moyenne</span>
           <span class="stat-value" id="stat-fc">--</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="stat-card-denivele">
           <span class="stat-label">Dénivelé positif (D+)</span>
           <span class="stat-value" id="stat-denivele">--</span>
         </div>
@@ -206,6 +208,43 @@
         <input type="text" id="nom-input" placeholder="ex : Sortie longue, Fractionné au parc">
         <button id="btn-valider-nom" class="bouton-secondaire">Enregistrer le nom</button>
         <p id="nom-message" class="message-info" style="display:none;"></p>
+      </div>
+
+      <!-- Type d'activité (22/09/2026) : un .tcx ne distingue presque jamais
+           trail/route, ni les sports au-delà de course à pied/vélo -> saisi
+           ici juste après l'import (pré-rempli quand c'est fiable, voir
+           typeParDefautDepuisSportBrut dans script.js), modifiable plus tard
+           depuis le détail de l'activité. Détermine aussi les stats/graphiques
+           affichés (ex. pas de distance/allure/D+ en musculation) et la
+           chaussure suggérée juste en dessous. -->
+      <div class="rpe-zone">
+        <label for="type-select">Type d'activité : </label>
+        <select id="type-select">
+          <option value="">-- non classé --</option>
+          <option value="trail">Course à pied — Trail</option>
+          <option value="route">Course à pied — Route</option>
+          <option value="velo">Vélo</option>
+          <option value="natation">Natation</option>
+          <option value="tapis">Course sur tapis</option>
+          <option value="ski_fond">Ski de fond</option>
+          <option value="musculation">Musculation</option>
+          <option value="autre">Autre</option>
+        </select>
+        <button id="btn-valider-type" class="bouton-secondaire">Enregistrer le type</button>
+        <p id="type-message" class="message-info" style="display:none;"></p>
+      </div>
+
+      <!-- Chaussure attribuée à cette activité (22/09/2026, voir la section
+           "Chaussures" dans Paramètres) : une paire est suggérée
+           automatiquement si elle est la seule ayant ce sport par défaut,
+           mais reste modifiable ici. -->
+      <div class="rpe-zone">
+        <label for="chaussure-select">Chaussures : </label>
+        <select id="chaussure-select">
+          <option value="">-- aucune --</option>
+        </select>
+        <button id="btn-valider-chaussure" class="bouton-secondaire">Enregistrer la chaussure</button>
+        <p id="chaussure-message" class="message-info" style="display:none;"></p>
       </div>
 
       <!-- Saisie du ressenti (RPE) juste après l'import : c'est le moment
@@ -245,7 +284,7 @@
           <tr>
             <th data-colonne="date">Date <span class="fleche-tri"></span></th>
             <th data-colonne="nom">Nom <span class="fleche-tri"></span></th>
-            <th data-colonne="sport">Sport <span class="fleche-tri"></span></th>
+            <th data-colonne="sport">Type <span class="fleche-tri"></span></th>
             <th data-colonne="distance">Distance <span class="fleche-tri"></span></th>
             <th data-colonne="duree">Durée <span class="fleche-tri"></span></th>
             <th data-colonne="allure">Allure <span class="fleche-tri"></span></th>
@@ -272,14 +311,42 @@
           <p id="detail-nom-message" class="message-info" style="display:none;"></p>
         </div>
 
+        <!-- Type d'activité + chaussure, modifiables à tout moment (voir la
+             saisie identique juste après l'import, plus haut sur cette page). -->
+        <div class="rpe-zone">
+          <label for="detail-type-select"><strong>Type d'activité :</strong></label>
+          <select id="detail-type-select">
+            <option value="">-- non classé --</option>
+            <option value="trail">Course à pied — Trail</option>
+            <option value="route">Course à pied — Route</option>
+            <option value="velo">Vélo</option>
+            <option value="natation">Natation</option>
+            <option value="tapis">Course sur tapis</option>
+            <option value="ski_fond">Ski de fond</option>
+            <option value="musculation">Musculation</option>
+            <option value="autre">Autre</option>
+          </select>
+          <button id="btn-valider-detail-type" class="bouton-secondaire">Enregistrer le type</button>
+          <p id="detail-type-message" class="message-info" style="display:none;"></p>
+        </div>
+
+        <div class="rpe-zone">
+          <label for="detail-chaussure-select"><strong>Chaussures :</strong></label>
+          <select id="detail-chaussure-select">
+            <option value="">-- aucune --</option>
+          </select>
+          <button id="btn-valider-detail-chaussure" class="bouton-secondaire">Enregistrer la chaussure</button>
+          <p id="detail-chaussure-message" class="message-info" style="display:none;"></p>
+        </div>
+
         <p><strong>Date :</strong> <span id="detail-date"></span></p>
-        <p><strong>Sport :</strong> <span id="detail-sport"></span></p>
-        <p><strong>Distance :</strong> <span id="detail-distance"></span></p>
+        <p><strong>Sport (brut du fichier) :</strong> <span id="detail-sport"></span></p>
+        <p id="detail-p-distance"><strong>Distance :</strong> <span id="detail-distance"></span></p>
         <p><strong>Durée :</strong> <span id="detail-duree"></span></p>
-        <p><strong>Allure :</strong> <span id="detail-allure"></span></p>
-        <p><strong>VAP moyenne :</strong> <span id="detail-vap"></span></p>
+        <p id="detail-p-allure"><strong>Allure :</strong> <span id="detail-allure"></span></p>
+        <p id="detail-p-vap"><strong>VAP moyenne :</strong> <span id="detail-vap"></span></p>
         <p><strong>FC moyenne :</strong> <span id="detail-fc"></span></p>
-        <p><strong>Dénivelé D+ :</strong> <span id="detail-denivele"></span></p>
+        <p id="detail-p-denivele"><strong>Dénivelé D+ :</strong> <span id="detail-denivele"></span></p>
         <p><strong>Calories :</strong> <span id="detail-calories"></span></p>
         <p><strong>Charge (TRIMP) :</strong> <span id="detail-charge"></span></p>
         <p><strong>Zone d'entraînement :</strong> <span id="detail-zone"></span></p>
@@ -318,14 +385,16 @@
           </select>
           <button id="btn-valider-detail-rpe" class="bouton-secondaire">Enregistrer le ressenti</button>
         </div>
-        <div id="carte" style="height: 400px; margin-top: 15px; border-radius: 8px;"></div>
+        <div id="detail-bloc-carte">
+          <div id="carte" style="height: 400px; margin-top: 15px; border-radius: 8px;"></div>
+        </div>
 
-        <div style="margin-top: 30px;">
+        <div style="margin-top: 30px;" id="detail-bloc-graph-denivele">
           <h3>Altitude en fonction de la distance</h3>
           <canvas id="chartDenivele"></canvas>
         </div>
 
-        <div style="margin-top: 30px;">
+        <div style="margin-top: 30px;" id="detail-bloc-graph-allure">
           <div style="margin-top: 30px; margin-bottom: 15px;">
             <label for="selectAllure">Affichage allure : </label>
             <select id="selectAllure">
@@ -548,6 +617,83 @@
         <tbody id="corps-tableau-zones-recap"></tbody>
       </table>
       </div>
+    </section>
+
+    <!-- ============================================================
+         CHAUSSURES (22/09/2026) : suivi d'usure par paire. Le kilométrage
+         cumulé n'est jamais saisi à la main : il est recalculé à partir des
+         activités rattachées à chaque paire (voir la section "Chaussures"
+         dans script.js). Une paire "retraitée" (bouton Retirer) n'est plus
+         proposée automatiquement mais reste visible, avec son historique.
+         ============================================================ -->
+    <section id="chaussures">
+      <h2>🥿 Chaussures</h2>
+      <p class="description">Suis le kilométrage de chacune de tes paires, calculé automatiquement à partir des activités que tu lui rattaches (voir le sélecteur "Chaussures" juste après l'import, ou dans le détail d'une activité). Une alerte s'affiche quand le seuil choisi est dépassé.</p>
+
+      <div class="reglages-grid">
+        <label for="chaussure-marque">Marque
+          <input type="text" id="chaussure-marque" placeholder="ex : Saucony">
+        </label>
+        <label for="chaussure-modele">Modèle
+          <input type="text" id="chaussure-modele" placeholder="ex : Peregrine 13">
+        </label>
+        <label for="chaussure-sport-defaut">Sport par défaut
+          <select id="chaussure-sport-defaut">
+            <option value="">Tous sports</option>
+            <option value="trail">Course à pied — Trail</option>
+            <option value="route">Course à pied — Route</option>
+            <option value="velo">Vélo</option>
+            <option value="natation">Natation</option>
+            <option value="tapis">Course sur tapis</option>
+            <option value="ski_fond">Ski de fond</option>
+            <option value="musculation">Musculation</option>
+            <option value="autre">Autre</option>
+          </select>
+        </label>
+        <label for="chaussure-seuil">Seuil d'alerte (km)
+          <input type="number" id="chaussure-seuil" min="50" step="50" placeholder="ex : 800">
+        </label>
+      </div>
+      <button id="btn-ajouter-chaussure" class="bouton-secondaire">Ajouter la paire</button>
+      <p id="chaussures-form-message" class="message-info" style="display:none;"></p>
+
+      <div class="tableau-scroll">
+      <table id="tableau-chaussures" class="tableau-recap">
+        <thead><tr><th>Marque</th><th>Modèle</th><th>Sport par défaut</th><th>Kilométrage</th><th>Statut</th><th></th></tr></thead>
+        <tbody id="corps-tableau-chaussures"></tbody>
+      </table>
+      </div>
+      <p id="chaussures-message" class="message-neutre" style="display:none;">Ajoute une première paire ci-dessus pour commencer à suivre son kilométrage.</p>
+    </section>
+
+    <!-- ============================================================
+         POIDS (22/09/2026) : saisie libre (pas de rythme imposé), pour
+         croiser l'évolution du poids avec la performance sportive. La
+         courbe correspondante s'ajoute aux métriques sélectionnables sur
+         l'aperçu de l'Accueil (voir la section "POIDS" dans script.js).
+         ============================================================ -->
+    <section id="poids">
+      <h2>⚖️ Poids</h2>
+      <p class="description">Enregistre ton poids aux dates de ton choix, sans rythme imposé. Une fois au moins une pesée saisie, une courbe "Poids" devient disponible parmi les métriques de l'aperçu sur l'onglet Accueil, pour comparer son évolution avec ta distance, ta charge ou ton D+.</p>
+
+      <div class="reglages-grid">
+        <label for="poids-date">Date
+          <input type="date" id="poids-date">
+        </label>
+        <label for="poids-valeur">Poids (kg)
+          <input type="number" id="poids-valeur" min="1" step="0.1" placeholder="ex : 68.5">
+        </label>
+      </div>
+      <button id="btn-ajouter-poids" class="bouton-secondaire">Ajouter la pesée</button>
+      <p id="poids-form-message" class="message-info" style="display:none;"></p>
+
+      <div class="tableau-scroll">
+      <table id="tableau-poids" class="tableau-recap">
+        <thead><tr><th>Date</th><th>Poids</th><th></th></tr></thead>
+        <tbody id="corps-tableau-poids"></tbody>
+      </table>
+      </div>
+      <p id="poids-message" class="message-neutre" style="display:none;">Ajoute une première pesée ci-dessus pour commencer le suivi.</p>
     </section>
 
     <!-- ============================================================
