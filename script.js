@@ -1071,6 +1071,16 @@ let periodeApercuActuelle = 'semaine'; // 'semaine' ou 'mois'
 // futures à afficher) — voir le bouton "suivant" désactivé dans afficherApercu().
 let offsetPeriodeApercu = 0;
 
+// Filtre par type d'activité (trail/route/vélo/...) appliqué aux métriques
+// dérivées des ACTIVITÉS (distance, charge, RPE, D+) — chaîne vide = "Tous
+// les sports" (comportement d'origine, aucun filtre). Ajouté le 22/09/2026 :
+// demande de l'utilisateur, dont le sport principal (trail) était noyé dans
+// la courbe de distance cumulée par une grosse sortie vélo occasionnelle. Le
+// Poids n'est PAS une métrique liée à une activité (c'est une mesure du
+// corps, pas d'une sortie) : il reste toujours affiché quel que soit ce
+// filtre, voir calculerSeriesApercu.
+let filtreTypeApercu = '';
+
 // Renvoie les bornes {debut, fin} (objets Date) de la période demandée :
 // la semaine ISO (lundi -> dimanche) ou le mois calendaire, décalé de
 // "offset" semaines/mois par rapport à celui contenant aujourd'hui.
@@ -1158,7 +1168,15 @@ function calculerSeriesApercu(periode, offset = 0) {
   const rpeParJour = new Array(nbJours).fill(0);
   const deniveleParJour = new Array(nbJours).fill(0);
 
-  activitesEnMemoire.forEach(act => {
+  // Filtre par type d'activité (voir filtreTypeApercu) : chaîne vide = pas de
+  // filtre, sinon ne garde que les activités classées dans CE type exact.
+  // Une activité pas encore classée (typeActivite === null) ne correspond à
+  // aucun filtre spécifique — normal, elle réapparaît une fois classée.
+  const activitesFiltrees = filtreTypeApercu
+    ? activitesEnMemoire.filter(act => act.typeActivite === filtreTypeApercu)
+    : activitesEnMemoire;
+
+  activitesFiltrees.forEach(act => {
     const dateActivite = new Date(act.date);
     if (dateActivite < debut || dateActivite > fin) return;
 
@@ -1247,6 +1265,20 @@ function afficherApercu() {
   const btnAujourdhui = document.getElementById('btn-periode-aujourdhui');
   if (btnAujourdhui) btnAujourdhui.style.display = (offsetPeriodeApercu === 0) ? 'none' : 'inline-block';
 
+  // Petit rappel visible seulement quand un filtre par type d'activité est
+  // actif, pour que des chiffres soudainement plus bas ne surprennent pas
+  // l'utilisateur (voir filtreTypeApercu) — et pour rappeler que le Poids,
+  // lui, n'est jamais concerné par ce filtre.
+  const noteFiltre = document.getElementById('apercu-filtre-note');
+  if (noteFiltre) {
+    if (filtreTypeApercu) {
+      noteFiltre.textContent = `Distance, charge, RPE et D+ limités aux activités "${libelleType(filtreTypeApercu)}". Le Poids, lui, reste toujours affiché quel que soit ce filtre.`;
+      noteFiltre.style.display = 'block';
+    } else {
+      noteFiltre.style.display = 'none';
+    }
+  }
+
   const datasets = [];
   const scales = {
     x: { title: { display: true, text: periodeApercuActuelle === 'mois' ? 'Jour du mois' : 'Jour de la semaine' } }
@@ -1303,7 +1335,24 @@ function afficherApercu() {
     data: { labels: series.labels, datasets },
     options: {
       responsive: true,
-      plugins: { legend: { display: true, position: 'top' } },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: {
+            // N'affiche dans la légende QUE les courbes actuellement
+            // visibles (métrique cochée) : par défaut, Chart.js liste aussi
+            // les courbes masquées (barrées), ce qui alourdit inutilement la
+            // légende dès que peu de métriques sont cochées — demande de
+            // l'utilisateur du 22/09/2026. Les cases à cocher au-dessus du
+            // graphique restent le seul moyen d'afficher/masquer une métrique.
+            filter: (item, data) => {
+              const dataset = data.datasets[item.datasetIndex];
+              return dataset ? dataset.hidden !== true : true;
+            }
+          }
+        }
+      },
       scales
     }
   });
@@ -1340,6 +1389,18 @@ document.getElementById('btn-periode-aujourdhui').addEventListener('click', () =
 METRIQUES_APERCU.forEach(metrique => {
   document.getElementById(metrique.idCase).addEventListener('change', afficherApercu);
 });
+
+// Filtre par type d'activité (voir filtreTypeApercu ci-dessus) : ne se
+// réinitialise PAS au changement semaine/mois ni à la navigation entre
+// périodes, comme les cases à cocher des métriques — l'utilisateur garde son
+// choix jusqu'à ce qu'il le change lui-même.
+const selectFiltreApercu = document.getElementById('apercu-filtre-type');
+if (selectFiltreApercu) {
+  selectFiltreApercu.addEventListener('change', function () {
+    filtreTypeApercu = this.value;
+    afficherApercu();
+  });
+}
 
 // ============================================================
 // RÉCAP SEMAINE PRÉCÉDENTE VS SEMAINE EN COURS (page Accueil)
