@@ -286,6 +286,14 @@ h1 {
   font-style: italic;
 }
 
+/* Texte d'alerte (ex. seuil de kilométrage d'une paire de chaussures
+   dépassé) — même couleur que .message-erreur, mais en ligne dans une
+   cellule de tableau plutôt qu'en bloc de message à part. */
+.texte-alerte {
+  color: #c0392b;
+  font-weight: 600;
+}
+
 /* --- Aperçu semaine/mois (page Accueil) --- */
 #apercu {
   background: white;
