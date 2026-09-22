@@ -540,6 +540,16 @@ h1 {
   margin-bottom: 4px;
   color: #2c3e50;
 }
+/* Sous-titre "Autres records" (distance la plus longue / D+ le plus
+   important, ajoutés le 23/09/2026) : plus discret que le titre du sport,
+   pour bien montrer qu'il s'agit d'une famille de records différente
+   (activité entière) et non d'une ligne de plus dans le tableau du dessus. */
+.records-bloc-sport h4 {
+  font-size: 0.82em;
+  font-weight: normal;
+  color: #666;
+  margin: 14px 0 4px;
+}
 .records-bloc-sport table {
   width: 100%;
   border-collapse: collapse;
