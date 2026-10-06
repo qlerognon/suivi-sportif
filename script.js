@@ -48,6 +48,7 @@ let arreterEcouteRecords = null;
 let arreterEcouteSegments = null;
 let arreterEcouteChaussures = null;
 let arreterEcoutePoids = null;
+let arreterEcouteObjectifs = null;
 
 auth.onAuthStateChanged(function (user) {
   if (user) {
@@ -63,6 +64,7 @@ auth.onAuthStateChanged(function (user) {
     arreterEcouteSegments = demarrerEcouteSegments(uidActuel);
     arreterEcouteChaussures = demarrerEcouteChaussures(uidActuel);
     arreterEcoutePoids = demarrerEcoutePoids(uidActuel);
+    arreterEcouteObjectifs = demarrerEcouteObjectifs(uidActuel);
   } else {
     // Déconnecté (ou pas encore connecté) : on coupe les écouteurs en cours
     // s'il y en avait, on vide l'état local, et on affiche l'écran de connexion.
@@ -73,12 +75,14 @@ auth.onAuthStateChanged(function (user) {
     if (arreterEcouteSegments) arreterEcouteSegments();
     if (arreterEcouteChaussures) arreterEcouteChaussures();
     if (arreterEcoutePoids) arreterEcoutePoids();
+    if (arreterEcouteObjectifs) arreterEcouteObjectifs();
     uidActuel = null;
     activitesEnMemoire = [];
     recordsManuelsEnMemoire = [];
     segmentsEnMemoire = [];
     chaussuresEnMemoire = [];
     poidsEnMemoire = [];
+    objectifsEnMemoire = [];
 
     document.getElementById('app-principal').style.display = 'none';
     document.getElementById('ecran-connexion').style.display = 'block';
@@ -145,6 +149,15 @@ function afficherPage(nomPage) {
   // rafraichirAffichageActivites), seulement en arrivant sur cet onglet.
   if (nomPage === 'records') {
     afficherSegments();
+  }
+
+  // La frise de périodisation dépend de la date du jour (pas seulement des
+  // objectifs enregistrés) : on la recalcule à chaque fois qu'on arrive sur
+  // cet onglet, plutôt que seulement à la création/modification d'un
+  // objectif, pour qu'elle reste exacte même après plusieurs jours sans
+  // avoir touché aux objectifs.
+  if (nomPage === 'plan') {
+    afficherFrise();
   }
 }
 
@@ -4207,3 +4220,412 @@ document.getElementById('btn-ajouter-poids').addEventListener('click', function 
   const champDate = document.getElementById('poids-date');
   if (champDate) champDate.valueAsDate = new Date();
 })();
+
+// ============================================================
+// PLAN D'ENTRAÎNEMENT — OBJECTIFS ET FRISE DE PÉRIODISATION
+// Première étape (06/10/2026) de l'intégration du plan d'entraînement
+// 2026-2027 dans l'outil (voir le document de référence
+// `plan-entrainement-2027.md`, dans le projet Claude — pas dans ce dépôt).
+// Un "objectif" est une course visée (nom, date, distance, D+, priorité,
+// statut, format/notes libre), stocké dans Firestore
+// (users/{uid}/objectifs/{id}). À partir de la liste des objectifs ET de la
+// date du jour, `calculerFrise` recalcule une FRISE DE PÉRIODISATION : les
+// blocs base/spécifique/taper/course/récupération qui mènent à chaque
+// objectif, selon sa priorité ("principale" = préparation complète,
+// "secondaire" = préparation courte) — reprenant les règles des sections 3
+// et 7 du document de référence, mais en version générique calculable
+// plutôt qu'une frise écrite à la main pour un cas particulier.
+//
+// Ce que cette première étape NE fait PAS encore (viendra dans une étape
+// suivante, une fois cette base validée) : les semaines-types détaillées
+// (séances jour par jour), la règle saisonnière (sport intérieur/extérieur
+// selon la saison) et la logique d'équivalence de charge croisée basée sur
+// le TRIMP (section 5 du document) — ces trois éléments restent pour
+// l'instant décrits dans le document seulement, pas calculés ici.
+// ============================================================
+
+let objectifsEnMemoire = [];
+
+const JOUR_MS = 24 * 60 * 60 * 1000;
+
+// Constantes de la périodisation (en jours), reprises du document de
+// référence (section 3) :
+const SEUIL_PROXIMITE_JOURS = 42;        // 6 semaines : au-delà, deux objectifs "principale" sont traités indépendamment
+const DUREE_SPECIFIQUE_JOURS = 56;       // 8 semaines de bloc spécifique (trail + "weekends chocs") avant un objectif "principale"
+const DUREE_TRANSITION_COURTE_JOURS = 21; // 3 semaines de transition avant un objectif "secondaire" (pas de bloc spécifique dédié)
+const DUREE_TAPER_JOURS = 7;             // 1 semaine de taper, dans tous les cas
+const DUREE_RECUP_COURTE_JOURS = 7;      // 1 semaine de récupération par défaut
+const DUREE_RECUP_LONGUE_JOURS = 14;     // 2 semaines si l'objectif est un ultra (>= 50 km) ou une course à étapes
+
+// Parse une date de formulaire ("YYYY-MM-DD", sans heure ni fuseau) en objet
+// Date à minuit HEURE LOCALE. Important : `new Date('YYYY-MM-DD')` tout
+// court est interprété comme minuit UTC par le navigateur, ce qui peut
+// afficher la veille selon le fuseau — en ajoutant 'T00:00:00' (sans 'Z'),
+// on force une interprétation en heure locale, cohérente avec le reste de
+// cette section (qui n'utilise QUE des objets Date, jamais de ré-analyse de
+// chaîne ISO, précisément pour éviter ce genre de décalage).
+function parserDateObjectif(dateISO) {
+  return new Date(dateISO + 'T00:00:00');
+}
+
+function ajouterJours(date, nbJours) {
+  return new Date(date.getTime() + nbJours * JOUR_MS);
+}
+
+// Formate un objet Date (PAS une chaîne ISO à ré-analyser) en "JJ/MM/AAAA".
+function formaterDateObjet(date) {
+  const jour = date.getDate().toString().padStart(2, '0');
+  const mois = (date.getMonth() + 1).toString().padStart(2, '0');
+  const annee = date.getFullYear();
+  return `${jour}/${mois}/${annee}`;
+}
+
+// Un objectif est traité comme "long/étapes" (récupération de 2 semaines
+// plutôt qu'1) s'il fait au moins 50 km OU si son format mentionne
+// explicitement une course à étapes.
+function recuperationLongue(objectif) {
+  const distanceLongue = Number.isFinite(objectif.distanceKm) && objectif.distanceKm >= 50;
+  const formatEtapes = (objectif.format || '').toLowerCase().includes('étape');
+  return distanceLongue || formatEtapes;
+}
+
+// Calcule, pour chaque objectif (triés par date), la liste de ses blocs de
+// périodisation. Renvoie un tableau de { objectif, prioriteEffective, blocs }
+// où chaque bloc est { type, debut, fin } (des objets Date).
+//
+// Logique de chaînage : le premier bloc d'un objectif commence à la fin du
+// bloc de récupération de l'objectif précédent (ou aujourd'hui, pour le
+// premier objectif de la liste) — jamais avant, même si ça raccourcit le
+// bloc spécifique ou de transition par rapport à sa durée "idéale" (mieux
+// vaut une préparation plus courte que des dates qui se chevauchent).
+function calculerFrise(objectifs, aujourdHui) {
+  const tries = objectifs
+    .filter(o => o.date)
+    .map(o => ({ objectif: o, dateObj: parserDateObjectif(o.date) }))
+    .sort((a, b) => a.dateObj - b.dateObj);
+
+  let finBlocPrecedent = aujourdHui;
+  let dernierePrincipaleDate = null;
+  const resultats = [];
+
+  tries.forEach(({ objectif, dateObj }) => {
+    // Rétrogradation automatique (règle 3, section 7 du document) : un
+    // objectif "principale" trop proche du précédent objectif "principale"
+    // effectif est traité comme secondaire pour CETTE frise (pas de second
+    // pic de forme complet), sans changer la priorité enregistrée par
+    // l'utilisateur.
+    let prioriteEffective = objectif.priorite === 'principale' ? 'principale' : 'secondaire';
+    if (prioriteEffective === 'principale' && dernierePrincipaleDate !== null) {
+      const ecartJours = (dateObj - dernierePrincipaleDate) / JOUR_MS;
+      if (ecartJours < SEUIL_PROXIMITE_JOURS) prioriteEffective = 'secondaire';
+    }
+
+    const blocs = [];
+    const taperDebutIdeal = ajouterJours(dateObj, -DUREE_TAPER_JOURS);
+
+    if (prioriteEffective === 'principale') {
+      const specifiqueDebutIdeal = ajouterJours(taperDebutIdeal, -DUREE_SPECIFIQUE_JOURS);
+      const specifiqueDebut = specifiqueDebutIdeal > finBlocPrecedent ? specifiqueDebutIdeal : finBlocPrecedent;
+      if (specifiqueDebut > finBlocPrecedent) {
+        blocs.push({ type: 'base', debut: finBlocPrecedent, fin: specifiqueDebut });
+      }
+      if (taperDebutIdeal > specifiqueDebut) {
+        blocs.push({ type: 'specifique', debut: specifiqueDebut, fin: taperDebutIdeal });
+      }
+    } else {
+      const transitionDebutIdeal = ajouterJours(taperDebutIdeal, -DUREE_TRANSITION_COURTE_JOURS);
+      const transitionDebut = transitionDebutIdeal > finBlocPrecedent ? transitionDebutIdeal : finBlocPrecedent;
+      if (transitionDebut > finBlocPrecedent) {
+        blocs.push({ type: 'entretien', debut: finBlocPrecedent, fin: transitionDebut });
+      }
+      if (taperDebutIdeal > transitionDebut) {
+        blocs.push({ type: 'transition_courte', debut: transitionDebut, fin: taperDebutIdeal });
+      }
+    }
+
+    const taperDebut = taperDebutIdeal > finBlocPrecedent ? taperDebutIdeal : finBlocPrecedent;
+    if (dateObj > taperDebut) {
+      blocs.push({ type: 'taper', debut: taperDebut, fin: dateObj });
+    }
+    blocs.push({ type: 'course', debut: dateObj, fin: dateObj });
+
+    const dureeRecupJours = recuperationLongue(objectif) ? DUREE_RECUP_LONGUE_JOURS : DUREE_RECUP_COURTE_JOURS;
+    const finRecup = ajouterJours(dateObj, dureeRecupJours);
+    blocs.push({ type: 'recup', debut: dateObj, fin: finRecup });
+
+    resultats.push({ objectif, prioriteEffective, blocs });
+
+    finBlocPrecedent = finRecup;
+    if (prioriteEffective === 'principale') dernierePrincipaleDate = dateObj;
+  });
+
+  return resultats;
+}
+
+const LIBELLES_BLOC_FRISE = {
+  base: 'Base / entretien',
+  entretien: 'Entretien',
+  specifique: 'Bloc spécifique',
+  transition_courte: 'Transition courte',
+  taper: 'Taper',
+  course: 'COURSE',
+  recup: 'Récupération'
+};
+
+// Reconstruit la frise de périodisation (section "Plan") : une barre
+// visuelle proportionnelle à la durée de chaque bloc (juste pour l'aperçu
+// d'ensemble), suivie du détail textuel exact des dates de chaque bloc (la
+// barre seule ne permettrait pas de vérifier une date précise).
+function afficherFrise() {
+  const zone = document.getElementById('zone-frise');
+  if (!zone) return;
+
+  zone.innerHTML = '';
+
+  if (objectifsEnMemoire.length === 0) {
+    zone.innerHTML = '<p class="message-neutre">Ajoute un objectif ci-dessus pour voir apparaître la frise de périodisation.</p>';
+    return;
+  }
+
+  const aujourdHui = new Date();
+  aujourdHui.setHours(0, 0, 0, 0);
+
+  const frises = calculerFrise(objectifsEnMemoire, aujourdHui);
+
+  frises.forEach(({ objectif, prioriteEffective, blocs }) => {
+    const conteneur = document.createElement('div');
+    conteneur.className = 'frise-objectif';
+
+    const titre = document.createElement('h3');
+    titre.textContent = `${objectif.nom} — ${formaterDateObjet(parserDateObjectif(objectif.date))}` +
+      (prioriteEffective !== objectif.priorite
+        ? ' (préparation raccourcie : trop proche d\'un autre objectif principal)'
+        : '');
+    conteneur.appendChild(titre);
+
+    const barre = document.createElement('div');
+    barre.className = 'frise-barre';
+    blocs.forEach(b => {
+      const dureeJours = (b.fin - b.debut) / JOUR_MS;
+      if (dureeJours <= 0 && b.type !== 'course') return; // bloc complètement absorbé (pas assez de temps), rien à afficher
+      const segment = document.createElement('div');
+      segment.className = 'frise-segment frise-' + b.type;
+      segment.style.flexGrow = String(Math.max(dureeJours, 1));
+      segment.title = b.type === 'course'
+        ? `${LIBELLES_BLOC_FRISE[b.type]} : ${formaterDateObjet(b.debut)}`
+        : `${LIBELLES_BLOC_FRISE[b.type]} : du ${formaterDateObjet(b.debut)} au ${formaterDateObjet(b.fin)}`;
+      barre.appendChild(segment);
+    });
+    conteneur.appendChild(barre);
+
+    const liste = document.createElement('ul');
+    liste.className = 'frise-liste';
+    blocs.forEach(b => {
+      const dureeJours = (b.fin - b.debut) / JOUR_MS;
+      if (dureeJours <= 0 && b.type !== 'course') return;
+      const li = document.createElement('li');
+      li.textContent = b.type === 'course'
+        ? `${LIBELLES_BLOC_FRISE[b.type]} : ${formaterDateObjet(b.debut)}`
+        : `${LIBELLES_BLOC_FRISE[b.type]} : du ${formaterDateObjet(b.debut)} au ${formaterDateObjet(b.fin)}`;
+      liste.appendChild(li);
+    });
+    conteneur.appendChild(liste);
+
+    zone.appendChild(conteneur);
+  });
+}
+
+// --- Objectifs : CRUD (Firestore users/{uid}/objectifs/{id}) ---
+
+// Les deux objectifs déjà connus au 06/10/2026 (voir le document de
+// référence) : pré-remplis une seule fois à la toute première connexion
+// (voir demarrerEcouteObjectifs ci-dessous), modifiables ou supprimables
+// ensuite normalement comme n'importe quel objectif saisi à la main.
+function objectifsInitiaux() {
+  return [
+    {
+      id: 'objectif-trans-perce-2027',
+      nom: 'Trans Percé 75 km',
+      date: '2027-06-18',
+      distanceKm: 75,
+      deniveleM: 2800,
+      priorite: 'principale',
+      statut: 'confirme',
+      format: 'Course par étapes, 3 jours (18-20 juin) : ~13 km nocturne (Île Bonaventure) → ~45 km étape reine → ~15 km'
+    },
+    {
+      id: 'objectif-borealys-2027',
+      nom: 'UTMB Boréalys — relais 80 km (mon leg)',
+      date: '2027-08-15',
+      distanceKm: 20,
+      deniveleM: 900,
+      priorite: 'secondaire',
+      statut: 'non_confirme',
+      format: 'Relais UTMB par équipe (2 à 6), 1 leg sur 4 — date 2027 et découpage réel à confirmer (édition 2026 : 15/08/2026)'
+    }
+  ];
+}
+
+// Pré-remplissage UNE SEULE FOIS, à la première connexion après l'ajout de
+// cette fonctionnalité : un petit document "objectifs_meta" (distinct de
+// "config", pour ne jamais risquer d'écraser les réglages FC/TRIMP qui y
+// vivent) garde la trace que le pré-remplissage a déjà eu lieu, pour ne
+// JAMAIS recréer les deux objectifs si l'utilisateur les a supprimés
+// volontairement par la suite.
+function preremplirObjectifsSiBesoin(uid) {
+  const refMeta = db.collection('users').doc(uid).collection('reglages').doc('objectifs_meta');
+  refMeta.get().then(doc => {
+    if (doc.exists && doc.data().seedFait) return;
+
+    const refObjectifs = db.collection('users').doc(uid).collection('objectifs');
+    Promise.all(objectifsInitiaux().map(obj => refObjectifs.doc(obj.id).set(obj)))
+      .then(() => refMeta.set({ seedFait: true }))
+      .catch(erreur => console.error('Erreur de pré-remplissage des objectifs :', erreur));
+  }).catch(erreur => console.error('Erreur de lecture du statut de pré-remplissage des objectifs :', erreur));
+}
+
+// Écoute Firestore en continu (voir demarrerEcouteReglages plus haut pour le
+// même principe en détail). Renvoie une fonction pour arrêter l'écoute (à la
+// déconnexion).
+function demarrerEcouteObjectifs(uid) {
+  preremplirObjectifsSiBesoin(uid);
+
+  return db.collection('users').doc(uid).collection('objectifs')
+    .onSnapshot(function (snapshot) {
+      objectifsEnMemoire = snapshot.docs.map(doc => doc.data());
+      afficherObjectifs();
+      afficherFrise();
+    }, function (erreur) {
+      console.error('Erreur d\'écoute des objectifs :', erreur);
+    });
+}
+
+const LIBELLES_PRIORITE = { principale: 'Principale', secondaire: 'Secondaire' };
+const LIBELLES_STATUT_OBJECTIF = { confirme: 'Confirmé', non_confirme: 'Non confirmé' };
+
+// Id de l'objectif en cours de modification (formulaire en mode édition),
+// null si le formulaire sert à en AJOUTER un nouveau — même principe que le
+// reste de l'app (ex. activiteEnCoursAffichage) : un seul état global plutôt
+// qu'un paramètre à faire voyager partout.
+let objectifEnCoursEdition = null;
+
+function afficherObjectifs() {
+  const corps = document.getElementById('corps-tableau-objectifs');
+  const messageVide = document.getElementById('objectifs-vide-message');
+  if (!corps) return;
+
+  if (objectifsEnMemoire.length === 0) {
+    corps.innerHTML = '';
+    if (messageVide) messageVide.style.display = 'block';
+    return;
+  }
+  if (messageVide) messageVide.style.display = 'none';
+
+  const objectifsTries = [...objectifsEnMemoire].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  corps.innerHTML = '';
+  objectifsTries.forEach(objectif => {
+    const ligne = document.createElement('tr');
+    ligne.innerHTML = `
+      <td>${objectif.nom}</td>
+      <td>${objectif.date ? formaterDateObjet(parserDateObjectif(objectif.date)) : '--'}</td>
+      <td>${Number.isFinite(objectif.distanceKm) ? objectif.distanceKm + ' km' : '--'}</td>
+      <td>${Number.isFinite(objectif.deniveleM) ? objectif.deniveleM + ' m' : '--'}</td>
+      <td>${LIBELLES_PRIORITE[objectif.priorite] || objectif.priorite}</td>
+      <td>${LIBELLES_STATUT_OBJECTIF[objectif.statut] || objectif.statut}</td>
+      <td>
+        <button type="button" class="bouton-modifier-objectif" title="Modifier">✏️</button>
+        <button type="button" class="bouton-supprimer-objectif" title="Supprimer">🗑️</button>
+      </td>
+    `;
+    ligne.querySelector('.bouton-modifier-objectif').addEventListener('click', () => chargerObjectifDansFormulaire(objectif));
+    ligne.querySelector('.bouton-supprimer-objectif').addEventListener('click', () => {
+      const confirmation = confirm(`Supprimer l'objectif "${objectif.nom}" ?`);
+      if (confirmation) supprimerObjectif(objectif.id);
+    });
+    corps.appendChild(ligne);
+  });
+}
+
+function viderFormulaireObjectif() {
+  document.getElementById('objectif-nom').value = '';
+  document.getElementById('objectif-date').value = '';
+  document.getElementById('objectif-distance').value = '';
+  document.getElementById('objectif-denivele').value = '';
+  document.getElementById('objectif-priorite').value = 'principale';
+  document.getElementById('objectif-statut').value = 'confirme';
+  document.getElementById('objectif-format').value = '';
+}
+
+// Bascule le formulaire en mode édition, pré-rempli avec l'objectif choisi
+// (bouton ✏️ du tableau) — "Ajouter l'objectif" devient effectivement "Mettre
+// à jour" tant qu'on n'a pas validé ou cliqué sur "Annuler la modification".
+function chargerObjectifDansFormulaire(objectif) {
+  objectifEnCoursEdition = objectif.id;
+  document.getElementById('objectif-nom').value = objectif.nom || '';
+  document.getElementById('objectif-date').value = objectif.date || '';
+  document.getElementById('objectif-distance').value = Number.isFinite(objectif.distanceKm) ? objectif.distanceKm : '';
+  document.getElementById('objectif-denivele').value = Number.isFinite(objectif.deniveleM) ? objectif.deniveleM : '';
+  document.getElementById('objectif-priorite').value = objectif.priorite === 'secondaire' ? 'secondaire' : 'principale';
+  document.getElementById('objectif-statut').value = objectif.statut === 'non_confirme' ? 'non_confirme' : 'confirme';
+  document.getElementById('objectif-format').value = objectif.format || '';
+
+  document.getElementById('btn-ajouter-objectif').textContent = 'Mettre à jour l\'objectif';
+  document.getElementById('btn-annuler-edition-objectif').style.display = 'inline-block';
+}
+
+function annulerEditionObjectif() {
+  objectifEnCoursEdition = null;
+  viderFormulaireObjectif();
+  document.getElementById('btn-ajouter-objectif').textContent = 'Ajouter l\'objectif';
+  document.getElementById('btn-annuler-edition-objectif').style.display = 'none';
+}
+
+function supprimerObjectif(id) {
+  db.collection('users').doc(uidActuel).collection('objectifs').doc(id).delete()
+    .catch(erreur => console.error('Erreur de suppression de l\'objectif :', erreur));
+  // Si on supprime l'objectif qu'on était en train de modifier, on referme le formulaire d'édition.
+  if (objectifEnCoursEdition === id) annulerEditionObjectif();
+}
+
+document.getElementById('btn-ajouter-objectif').addEventListener('click', function () {
+  const nom = document.getElementById('objectif-nom').value.trim();
+  const date = document.getElementById('objectif-date').value;
+  const distanceSaisie = parseFloat(document.getElementById('objectif-distance').value);
+  const deniveleSaisi = parseInt(document.getElementById('objectif-denivele').value);
+  const priorite = document.getElementById('objectif-priorite').value;
+  const statut = document.getElementById('objectif-statut').value;
+  const format = document.getElementById('objectif-format').value.trim();
+  const message = document.getElementById('objectifs-message');
+
+  if (!nom || !date) {
+    message.textContent = '❌ Le nom et la date de l\'objectif sont obligatoires.';
+    message.style.display = 'block';
+    return;
+  }
+
+  const id = objectifEnCoursEdition || ('objectif-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+  const objectif = {
+    id, nom, date,
+    distanceKm: Number.isFinite(distanceSaisie) ? distanceSaisie : null,
+    deniveleM: Number.isFinite(deniveleSaisi) ? deniveleSaisi : null,
+    priorite, statut, format
+  };
+
+  const enEdition = objectifEnCoursEdition !== null;
+
+  db.collection('users').doc(uidActuel).collection('objectifs').doc(id).set(objectif)
+    .then(() => {
+      message.textContent = enEdition ? '✅ Objectif mis à jour.' : '✅ Objectif ajouté.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+      annulerEditionObjectif();
+    })
+    .catch(erreur => {
+      console.error('Erreur d\'enregistrement de l\'objectif :', erreur);
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+document.getElementById('btn-annuler-edition-objectif').addEventListener('click', annulerEditionObjectif);
