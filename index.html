@@ -574,16 +574,21 @@
   </section>
 
   <!-- ============================================================
-       PAGE PLAN : objectifs (courses visées) et frise de périodisation
-       calculée automatiquement à partir de leurs dates. Première étape
-       (06/10/2026) de l'intégration du plan d'entraînement 2026-2027
-       (voir le document de référence `plan-entrainement-2027.md` dans le
-       projet Claude) : pour l'instant, juste les objectifs + la frise
-       (base/spécifique/taper/course/récup) — pas encore les semaines-types,
-       la règle saisonnière ni la logique d'équivalence charge croisée
-       (TRIMP), qui viendront dans une étape suivante.
+       PAGE PLAN : objectifs (courses visées), périodes spécifiques, frise
+       de périodisation calculée automatiquement, indicateur de saison et
+       semaines-types de référence (+ équivalence de charge croisée TRIMP).
+       Intégration du plan d'entraînement 2026-2027 (voir le document de
+       référence `plan-entrainement-2027.md` dans le projet Claude),
+       démarrée le 06/10/2026.
        ============================================================ -->
   <section id="page-plan" class="page" style="display:none;">
+
+    <!-- Indicateur de saison (06/10/2026) : purement informatif, calculé à
+         partir de la date du jour (voir determinerSaison dans script.js) —
+         ne modifie rien d'autre dans l'app. -->
+    <section id="plan-saison">
+      <p id="indicateur-saison" class="message-neutre"></p>
+    </section>
 
     <section id="plan-objectifs">
       <h2>🎯 Objectifs</h2>
@@ -638,10 +643,68 @@
       <p id="objectifs-vide-message" class="message-neutre" style="display:none;">Aucun objectif pour l'instant — ajoute-en un ci-dessus pour voir apparaître la frise de périodisation.</p>
     </section>
 
+    <!-- ============================================================
+         PÉRIODES SPÉCIFIQUES (ajouté le 06/10/2026) : des événements
+         ponctuels à superposer à la frise calculée (pause forcée, semaine
+         de disponibilité réduite, "weekend choc" déjà prévu), SANS changer
+         le calcul des blocs eux-mêmes — juste un signal visuel/textuel sur
+         les blocs qu'elles recoupent (voir afficherFrise dans script.js).
+         ============================================================ -->
+    <section id="plan-periodes">
+      <h2>📌 Périodes spécifiques</h2>
+      <p class="description">Des périodes ponctuelles à superposer à la frise : une pause forcée (blessure, voyage, imprévu — aucun entraînement possible), une semaine de disponibilité réduite où il faudra lever le pied, ou un "weekend choc" déjà prévu. Elles sont signalées (⚠️) sur les blocs de la frise ci-dessous qu'elles recoupent, sans changer le calcul des blocs eux-mêmes — pour l'instant, le plan ne se réorganise pas encore automatiquement autour d'elles.</p>
+
+      <details id="periode-nouvelle">
+        <summary>➕ Ajouter une période</summary>
+
+        <div class="reglages-grid">
+          <label for="periode-type">Type
+            <select id="periode-type">
+              <option value="pause">Pause forcée (aucun entraînement)</option>
+              <option value="reduite">Disponibilité réduite (lever le pied)</option>
+              <option value="weekend_choc">Weekend choc prévu</option>
+            </select>
+          </label>
+          <label for="periode-date-debut">Date de début
+            <input type="date" id="periode-date-debut">
+          </label>
+          <label for="periode-date-fin">Date de fin
+            <input type="date" id="periode-date-fin">
+          </label>
+          <label for="periode-notes">Notes (optionnel)
+            <input type="text" id="periode-notes" placeholder="ex : voyage, blessure, imprévu...">
+          </label>
+        </div>
+        <button id="btn-ajouter-periode" class="bouton-secondaire">Ajouter la période</button>
+        <button id="btn-annuler-edition-periode" class="bouton-secondaire bouton-annuler" style="display:none;">Annuler la modification</button>
+        <p id="periodes-message" class="message-info" style="display:none;"></p>
+      </details>
+
+      <div class="tableau-scroll">
+      <table id="tableau-periodes" class="tableau-recap">
+        <thead><tr><th>Type</th><th>Dates</th><th>Notes</th><th></th></tr></thead>
+        <tbody id="corps-tableau-periodes"></tbody>
+      </table>
+      </div>
+      <p id="periodes-vide-message" class="message-neutre" style="display:none;">Aucune période spécifique pour l'instant.</p>
+    </section>
+
     <section id="plan-frise">
       <h2>📅 Frise de périodisation</h2>
-      <p class="description">Calculée automatiquement à partir des objectifs ci-dessus et de la date du jour. Le bloc "Base / entretien" est lui-même découpé en cycles de 4 semaines (3 semaines progressives + 1 semaine d'assimilation, le schéma 3:1 classique en périodisation d'endurance) — détail dans la liste sous chaque objectif. Dates approximatives — le contenu détaillé de chaque semaine (séances, règle saisonnière, substitutions à charge équivalente) reste décrit dans le document de référence pour l'instant, pas encore affiché ici.</p>
+      <p class="description">Calculée automatiquement à partir des objectifs ci-dessus et de la date du jour. Le bloc "Base / entretien" est lui-même découpé en cycles de 4 semaines (3 semaines progressives + 1 semaine d'assimilation, le schéma 3:1 classique en périodisation d'endurance) — détail dans la liste sous chaque objectif. Les périodes spécifiques définies ci-dessus apparaissent en ⚠️ sur les blocs qu'elles recoupent. Dates approximatives — le contenu détaillé de chaque semaine (séances-types) est donné à titre de repère dans la section suivante, pas lié à des dates calendaires précises.</p>
       <div id="zone-frise"></div>
+    </section>
+
+    <!-- Semaines-types de référence + équivalence de charge croisée TRIMP
+         (06/10/2026) : un modèle PAR TYPE DE BLOC (pas un calendrier jour
+         par jour — voir le document de référence, section 6, qui déconseille
+         justement cette rigidité), avec une fourchette de charge cible en
+         TRIMP par séance-type, calculée à la volée à partir des réglages FC/
+         zones (Paramètres) — voir calculerTrimpCible dans script.js. -->
+    <section id="plan-seances-types">
+      <h2>🗓️ Semaines-types de référence</h2>
+      <p class="description">Un modèle de semaine par type de bloc de la frise ci-dessus — un repère, pas un calendrier figé jour par jour (le plan reste organisé en blocs fonctionnels, voir le document de référence). Chaque séance-type porte son sport par défaut, sa zone FC visée, une fourchette de charge cible en TRIMP (calculée à partir de tes réglages FC/zones dans Paramètres) et, le cas échéant, des substituts acceptés à charge équivalente — à combiner avec l'indicateur de saison ci-dessus pour choisir le sport réellement adapté à la période de l'année.</p>
+      <div id="zone-seances-types"></div>
     </section>
 
   </section>
