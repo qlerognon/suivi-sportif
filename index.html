@@ -589,38 +589,45 @@
       <h2>🎯 Objectifs</h2>
       <p class="description">Les courses/objectifs qui structurent le plan. Un objectif "principal" reçoit une préparation complète (base → bloc spécifique de 8 semaines → taper d'une semaine) ; un objectif "secondaire" reçoit une préparation plus courte (3 semaines de transition → taper). Deux objectifs "principal" trop proches dans le temps (moins de 6 semaines) : le second est automatiquement traité comme secondaire pour la frise, plutôt que d'ouvrir un deuxième pic de forme complet.</p>
 
-      <div class="reglages-grid">
-        <label for="objectif-nom">Nom
-          <input type="text" id="objectif-nom" placeholder="ex : Trans Percé 75 km">
-        </label>
-        <label for="objectif-date">Date
-          <input type="date" id="objectif-date">
-        </label>
-        <label for="objectif-distance">Distance en km (optionnel)
-          <input type="number" id="objectif-distance" step="0.1" min="0" placeholder="ex : 75">
-        </label>
-        <label for="objectif-denivele">D+ en m (optionnel)
-          <input type="number" id="objectif-denivele" step="1" min="0" placeholder="ex : 2800">
-        </label>
-        <label for="objectif-priorite">Priorité
-          <select id="objectif-priorite">
-            <option value="principale">Principale (préparation complète)</option>
-            <option value="secondaire">Secondaire (préparation courte)</option>
-          </select>
-        </label>
-        <label for="objectif-statut">Statut
-          <select id="objectif-statut">
-            <option value="confirme">Confirmé</option>
-            <option value="non_confirme">Non confirmé</option>
-          </select>
-        </label>
-        <label for="objectif-format">Format / notes (optionnel)
-          <input type="text" id="objectif-format" placeholder="ex : course par étapes, 3 jours">
-        </label>
-      </div>
-      <button id="btn-ajouter-objectif" class="bouton-secondaire">Ajouter l'objectif</button>
-      <button id="btn-annuler-edition-objectif" class="bouton-secondaire bouton-annuler" style="display:none;">Annuler la modification</button>
-      <p id="objectifs-message" class="message-info" style="display:none;"></p>
+      <details id="objectif-nouveau">
+        <summary>➕ Ajouter un objectif</summary>
+
+        <div class="reglages-grid">
+          <label for="objectif-nom">Nom
+            <input type="text" id="objectif-nom" placeholder="ex : Trans Percé 75 km">
+          </label>
+          <label for="objectif-date">Date (premier jour si plusieurs)
+            <input type="date" id="objectif-date">
+          </label>
+          <label for="objectif-date-fin">Date de fin (optionnel, si plusieurs jours)
+            <input type="date" id="objectif-date-fin">
+          </label>
+          <label for="objectif-distance">Distance en km (optionnel)
+            <input type="number" id="objectif-distance" step="0.1" min="0" placeholder="ex : 75">
+          </label>
+          <label for="objectif-denivele">D+ en m (optionnel)
+            <input type="number" id="objectif-denivele" step="1" min="0" placeholder="ex : 2800">
+          </label>
+          <label for="objectif-priorite">Priorité
+            <select id="objectif-priorite">
+              <option value="principale">Principale (préparation complète)</option>
+              <option value="secondaire">Secondaire (préparation courte)</option>
+            </select>
+          </label>
+          <label for="objectif-statut">Statut
+            <select id="objectif-statut">
+              <option value="confirme">Confirmé</option>
+              <option value="non_confirme">Non confirmé</option>
+            </select>
+          </label>
+          <label for="objectif-format">Format / notes (optionnel)
+            <input type="text" id="objectif-format" placeholder="ex : course par étapes, 3 jours">
+          </label>
+        </div>
+        <button id="btn-ajouter-objectif" class="bouton-secondaire">Ajouter l'objectif</button>
+        <button id="btn-annuler-edition-objectif" class="bouton-secondaire bouton-annuler" style="display:none;">Annuler la modification</button>
+        <p id="objectifs-message" class="message-info" style="display:none;"></p>
+      </details>
 
       <div class="tableau-scroll">
       <table id="tableau-objectifs" class="tableau-recap">
@@ -633,7 +640,7 @@
 
     <section id="plan-frise">
       <h2>📅 Frise de périodisation</h2>
-      <p class="description">Calculée automatiquement à partir des objectifs ci-dessus et de la date du jour. Dates approximatives — le détail de ce que contient chaque bloc (semaines-types, règle saisonnière, substitutions à charge équivalente) reste décrit dans le document de référence pour l'instant, pas encore affiché ici.</p>
+      <p class="description">Calculée automatiquement à partir des objectifs ci-dessus et de la date du jour. Le bloc "Base / entretien" est lui-même découpé en cycles de 4 semaines (3 semaines progressives + 1 semaine d'assimilation, le schéma 3:1 classique en périodisation d'endurance) — détail dans la liste sous chaque objectif. Dates approximatives — le contenu détaillé de chaque semaine (séances, règle saisonnière, substitutions à charge équivalente) reste décrit dans le document de référence pour l'instant, pas encore affiché ici.</p>
       <div id="zone-frise"></div>
     </section>
 
