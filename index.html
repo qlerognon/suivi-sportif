@@ -189,7 +189,7 @@
           <span class="stat-value" id="stat-distance">--</span>
         </div>
         <div class="stat-card" id="stat-card-allure">
-          <span class="stat-label">Allure moyenne</span>
+          <span class="stat-label" id="stat-label-allure">Allure moyenne</span>
           <span class="stat-value" id="stat-allure">--</span>
         </div>
         <div class="stat-card" id="stat-card-vap">
@@ -306,7 +306,7 @@
             <th data-colonne="sport">Type <span class="fleche-tri"></span></th>
             <th data-colonne="distance">Distance <span class="fleche-tri"></span></th>
             <th data-colonne="duree">Durée <span class="fleche-tri"></span></th>
-            <th data-colonne="allure">Allure <span class="fleche-tri"></span></th>
+            <th data-colonne="allure">Allure / Vitesse <span class="fleche-tri"></span></th>
             <th data-colonne="fc">FC moy. <span class="fleche-tri"></span></th>
             <th data-colonne="charge">Charge <span class="fleche-tri"></span></th>
             <th data-colonne="rpe">RPE <span class="fleche-tri"></span></th>
@@ -361,7 +361,7 @@
         <p><strong>Sport (brut du fichier) :</strong> <span id="detail-sport"></span></p>
         <p id="detail-p-distance"><strong>Distance :</strong> <span id="detail-distance"></span></p>
         <p><strong>Durée :</strong> <span id="detail-duree"></span></p>
-        <p id="detail-p-allure"><strong>Allure :</strong> <span id="detail-allure"></span></p>
+        <p id="detail-p-allure"><strong id="detail-label-allure">Allure :</strong> <span id="detail-allure"></span></p>
         <p id="detail-p-vap"><strong>VAP moyenne :</strong> <span id="detail-vap"></span></p>
         <p><strong>FC moyenne :</strong> <span id="detail-fc"></span></p>
         <p id="detail-p-denivele"><strong>Dénivelé D+ :</strong> <span id="detail-denivele"></span></p>
@@ -379,11 +379,38 @@
           <div class="tableau-scroll">
           <table id="tableau-laps" class="tableau-recap">
             <thead>
-              <tr><th>Tour</th><th>Distance</th><th>Durée</th><th>Allure</th><th>FC moy.</th></tr>
+              <tr><th>Tour</th><th>Distance</th><th>Durée</th><th id="th-lap-allure">Allure</th><th>FC moy.</th></tr>
             </thead>
             <tbody id="corps-tableau-laps"></tbody>
           </table>
           </div>
+        </div>
+
+        <!-- Correction vitesse/pente par tour, pour une activité "Course sur
+             tapis" (06/10/2026, demande de l'utilisateur). Contrairement au
+             tableau des tours ci-dessus (masqué s'il n'y a qu'un seul tour),
+             cette zone reste TOUJOURS visible pour ce type d'activité, y
+             compris avec un seul tour (le cas le plus fréquent : aucun appui
+             sur "tour" pendant la séance) — un tapis n'a pas de GPS, donc la
+             distance/l'allure/le D+ lus dans le .tcx à l'import sont souvent
+             approximatifs ou à plat, et correctibles ici à la main. Voir
+             afficherEditionTapis/enregistrerCorrectionsTapis dans script.js. -->
+        <div id="detail-tapis-zone" style="margin-top: 20px; display:none;">
+          <h3>Corriger la vitesse et la pente du tapis</h3>
+          <p class="message-neutre">Indique la vitesse (km/h) et la pente (%) réglées sur le tapis pour chaque tour : la distance de ce tour est recalculée automatiquement (vitesse × durée du tour, qui elle ne change pas), et le D+ de la séance ne compte que les tours en pente positive (une pente nulle ou négative ne retire rien).</p>
+          <div class="tableau-scroll">
+          <table id="tableau-tapis" class="tableau-recap">
+            <thead>
+              <tr><th>Tour</th><th>Durée</th><th>Vitesse (km/h)</th><th>Pente (%)</th><th>Distance</th><th>D+</th></tr>
+            </thead>
+            <tbody id="corps-tableau-tapis"></tbody>
+            <tfoot>
+              <tr><th colspan="4">Total</th><th id="tapis-total-distance">--</th><th id="tapis-total-denivele">--</th></tr>
+            </tfoot>
+          </table>
+          </div>
+          <button id="btn-valider-tapis" class="bouton-secondaire">Enregistrer les corrections</button>
+          <p id="tapis-message" class="message-info" style="display:none;"></p>
         </div>
 
         <div class="rpe-zone">
