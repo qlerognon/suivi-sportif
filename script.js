@@ -49,6 +49,7 @@ let arreterEcouteSegments = null;
 let arreterEcouteChaussures = null;
 let arreterEcoutePoids = null;
 let arreterEcouteObjectifs = null;
+let arreterEcoutePeriodes = null;
 
 auth.onAuthStateChanged(function (user) {
   if (user) {
@@ -65,6 +66,7 @@ auth.onAuthStateChanged(function (user) {
     arreterEcouteChaussures = demarrerEcouteChaussures(uidActuel);
     arreterEcoutePoids = demarrerEcoutePoids(uidActuel);
     arreterEcouteObjectifs = demarrerEcouteObjectifs(uidActuel);
+    arreterEcoutePeriodes = demarrerEcoutePeriodes(uidActuel);
   } else {
     // Déconnecté (ou pas encore connecté) : on coupe les écouteurs en cours
     // s'il y en avait, on vide l'état local, et on affiche l'écran de connexion.
@@ -76,6 +78,7 @@ auth.onAuthStateChanged(function (user) {
     if (arreterEcouteChaussures) arreterEcouteChaussures();
     if (arreterEcoutePoids) arreterEcoutePoids();
     if (arreterEcouteObjectifs) arreterEcouteObjectifs();
+    if (arreterEcoutePeriodes) arreterEcoutePeriodes();
     uidActuel = null;
     activitesEnMemoire = [];
     recordsManuelsEnMemoire = [];
@@ -83,6 +86,7 @@ auth.onAuthStateChanged(function (user) {
     chaussuresEnMemoire = [];
     poidsEnMemoire = [];
     objectifsEnMemoire = [];
+    periodesEnMemoire = [];
 
     document.getElementById('app-principal').style.display = 'none';
     document.getElementById('ecran-connexion').style.display = 'block';
@@ -158,6 +162,8 @@ function afficherPage(nomPage) {
   // avoir touché aux objectifs.
   if (nomPage === 'plan') {
     afficherFrise();
+    afficherIndicateurSaison();
+    afficherSeancesTypes();
   }
 }
 
@@ -739,6 +745,10 @@ function demarrerEcouteReglages(uid) {
         const act = activitesEnMemoire[activiteEnCoursAffichage];
         if (act) document.getElementById('detail-charge').textContent = formaterCharge(calculerCharge(act));
       }
+      // Les fourchettes de charge cible des séances-types (page Plan) sont
+      // elles aussi calculées à partir de ces réglages (voir plus bas,
+      // calculerTrimpCible) : à rafraîchir pour les mêmes raisons.
+      afficherSeancesTypes();
     }, function (erreur) {
       console.error('Erreur d\'écoute des réglages :', erreur);
     });
@@ -883,6 +893,9 @@ function demarrerEcouteVO2max(uid) {
         const act = activitesEnMemoire[activiteEnCoursAffichage];
         if (act) document.getElementById('detail-zone').textContent = formaterZone(calculerZone(act.fcMoyenne));
       }
+      // Les zones FC pilotent aussi les fourchettes de charge cible des
+      // séances-types (page Plan, voir calculerTrimpCible plus bas).
+      afficherSeancesTypes();
     }, function (erreur) {
       console.error('Erreur d\'écoute VO2max :', erreur);
     });
@@ -4446,6 +4459,17 @@ function formaterPlageDateObjectif(objectif) {
   return `${debut} → ${fin}`;
 }
 
+// Les périodes spécifiques (pause forcée, disponibilité réduite, "weekend
+// choc") qui recoupent l'intervalle [debut, fin) d'un bloc ou sous-bloc.
+function periodesChevauchantIntervalle(debut, fin) {
+  return periodesEnMemoire.filter(p => periodeChevauche(p, debut, fin));
+}
+
+function libellePeriode(periode) {
+  const base = `${ICONES_TYPE_PERIODE[periode.type] || '⚠️'} ${LIBELLES_TYPE_PERIODE[periode.type] || periode.type} : ${formaterPlagePeriode(periode)}`;
+  return periode.notes ? `${base} — ${periode.notes}` : base;
+}
+
 // Reconstruit la frise de périodisation (section "Plan") : une barre
 // visuelle proportionnelle à la durée de chaque bloc (juste pour l'aperçu
 // d'ensemble), suivie du détail textuel exact des dates de chaque bloc (la
@@ -4490,19 +4514,23 @@ function afficherFrise() {
         b.sousBlocs.forEach(sb => {
           const dureeSousBloc = (sb.fin - sb.debut) / JOUR_MS;
           if (dureeSousBloc <= 0) return;
+          const alertesSousBloc = periodesChevauchantIntervalle(sb.debut, sb.fin);
           const segmentSousBloc = document.createElement('div');
-          segmentSousBloc.className = 'frise-segment frise-' + sb.type;
+          segmentSousBloc.className = 'frise-segment frise-' + sb.type + (alertesSousBloc.length > 0 ? ' frise-segment-alerte' : '');
           segmentSousBloc.style.flexGrow = String(Math.max(dureeSousBloc, 1));
-          segmentSousBloc.title = `${LIBELLES_BLOC_FRISE[b.type]} — ${libelleBloc(LIBELLES_SOUS_BLOC_FRISE[sb.type], sb)}`;
+          segmentSousBloc.title = `${LIBELLES_BLOC_FRISE[b.type]} — ${libelleBloc(LIBELLES_SOUS_BLOC_FRISE[sb.type], sb)}` +
+            (alertesSousBloc.length > 0 ? ' — ' + alertesSousBloc.map(libellePeriode).join(' ; ') : '');
           barre.appendChild(segmentSousBloc);
         });
         return;
       }
 
+      const alertesBloc = periodesChevauchantIntervalle(b.debut, b.fin);
       const segment = document.createElement('div');
-      segment.className = 'frise-segment frise-' + b.type;
+      segment.className = 'frise-segment frise-' + b.type + (alertesBloc.length > 0 ? ' frise-segment-alerte' : '');
       segment.style.flexGrow = String(Math.max(dureeJours, 1));
-      segment.title = libelleBloc(LIBELLES_BLOC_FRISE[b.type], b);
+      segment.title = libelleBloc(LIBELLES_BLOC_FRISE[b.type], b) +
+        (alertesBloc.length > 0 ? ' — ' + alertesBloc.map(libellePeriode).join(' ; ') : '');
       barre.appendChild(segment);
     });
     conteneur.appendChild(barre);
@@ -4525,9 +4553,32 @@ function afficherFrise() {
           if (sb.type === 'progressif') numeroCycle++;
           const liSousBloc = document.createElement('li');
           liSousBloc.textContent = `Cycle ${numeroCycle} — ${libelleBloc(LIBELLES_SOUS_BLOC_FRISE[sb.type], sb)}`;
+          const alertesSousBloc = periodesChevauchantIntervalle(sb.debut, sb.fin);
+          if (alertesSousBloc.length > 0) {
+            const alertesListe = document.createElement('ul');
+            alertesListe.className = 'frise-alertes';
+            alertesSousBloc.forEach(p => {
+              const liAlerte = document.createElement('li');
+              liAlerte.textContent = libellePeriode(p);
+              alertesListe.appendChild(liAlerte);
+            });
+            liSousBloc.appendChild(alertesListe);
+          }
           sousListe.appendChild(liSousBloc);
         });
         li.appendChild(sousListe);
+      } else {
+        const alertesBloc = periodesChevauchantIntervalle(b.debut, b.fin);
+        if (alertesBloc.length > 0) {
+          const alertesListe = document.createElement('ul');
+          alertesListe.className = 'frise-alertes';
+          alertesBloc.forEach(p => {
+            const liAlerte = document.createElement('li');
+            liAlerte.textContent = libellePeriode(p);
+            alertesListe.appendChild(liAlerte);
+          });
+          li.appendChild(alertesListe);
+        }
       }
 
       liste.appendChild(li);
@@ -4753,3 +4804,407 @@ document.getElementById('btn-ajouter-objectif').addEventListener('click', functi
 });
 
 document.getElementById('btn-annuler-edition-objectif').addEventListener('click', annulerEditionObjectif);
+
+// ============================================================
+// PÉRIODES SPÉCIFIQUES (ajouté le 06/10/2026)
+// Des événements ponctuels que l'utilisateur veut superposer à la frise de
+// périodisation : une pause forcée (blessure, voyage, imprévu — aucun
+// entraînement possible), une semaine de disponibilité réduite où il faudra
+// lever le pied, ou un "weekend choc" déjà prévu. Stockées dans Firestore
+// (users/{uid}/periodes/{id} : type, dateDebut, dateFin, notes).
+//
+// Ce que cette première version fait : les signaler (⚠️) sur les blocs (et
+// sous-blocs progressifs) de la frise qu'elles recoupent, dans la barre
+// visuelle ET dans le détail textuel — voir l'intégration dans
+// `afficherFrise` ci-dessus. Ce qu'elle ne fait PAS encore : réorganiser
+// automatiquement les blocs autour d'elles (ex. raccourcir ou décaler un
+// bloc spécifique pour absorber une pause forcée) — pour l'instant c'est à
+// l'utilisateur d'interpréter le signal, la réorganisation automatique
+// pourra venir plus tard si le besoin se confirme.
+// ============================================================
+
+let periodesEnMemoire = [];
+
+const LIBELLES_TYPE_PERIODE = {
+  pause: 'Pause forcée',
+  reduite: 'Disponibilité réduite',
+  weekend_choc: 'Weekend choc prévu'
+};
+const ICONES_TYPE_PERIODE = {
+  pause: '⛔',
+  reduite: '🔽',
+  weekend_choc: '🔥'
+};
+
+// Vrai si la période [periode.dateDebut, periode.dateFin] recoupe
+// l'intervalle [debut, fin) d'un bloc ou sous-bloc de la frise (mêmes
+// objets Date que calculerFrise/decouperCyclesProgressifs, jamais de
+// chaîne ISO ré-analysée).
+function periodeChevauche(periode, debut, fin) {
+  if (!periode.dateDebut || !periode.dateFin) return false;
+  const pDebut = parserDateObjectif(periode.dateDebut);
+  const pFin = parserDateObjectif(periode.dateFin);
+  return pDebut < fin && pFin > debut;
+}
+
+function formaterPlagePeriode(periode) {
+  const debut = formaterDateObjet(parserDateObjectif(periode.dateDebut));
+  const fin = periode.dateFin === periode.dateDebut ? null : formaterDateObjet(parserDateObjectif(periode.dateFin));
+  return fin ? `du ${debut} au ${fin}` : debut;
+}
+
+// Écoute Firestore en continu (voir demarrerEcouteReglages plus haut pour le
+// même principe en détail). Renvoie une fonction pour arrêter l'écoute (à la
+// déconnexion).
+function demarrerEcoutePeriodes(uid) {
+  return db.collection('users').doc(uid).collection('periodes')
+    .onSnapshot(function (snapshot) {
+      periodesEnMemoire = snapshot.docs.map(doc => doc.data());
+      afficherPeriodes();
+      afficherFrise();
+    }, function (erreur) {
+      console.error('Erreur d\'écoute des périodes spécifiques :', erreur);
+    });
+}
+
+let periodeEnCoursEdition = null;
+
+function afficherPeriodes() {
+  const corps = document.getElementById('corps-tableau-periodes');
+  const messageVide = document.getElementById('periodes-vide-message');
+  if (!corps) return;
+
+  if (periodesEnMemoire.length === 0) {
+    corps.innerHTML = '';
+    if (messageVide) messageVide.style.display = 'block';
+    return;
+  }
+  if (messageVide) messageVide.style.display = 'none';
+
+  const periodesTriees = [...periodesEnMemoire].sort((a, b) => (a.dateDebut || '').localeCompare(b.dateDebut || ''));
+
+  corps.innerHTML = '';
+  periodesTriees.forEach(periode => {
+    const ligne = document.createElement('tr');
+    ligne.innerHTML = `
+      <td>${ICONES_TYPE_PERIODE[periode.type] || ''} ${LIBELLES_TYPE_PERIODE[periode.type] || periode.type}</td>
+      <td>${periode.dateDebut ? formaterPlagePeriode(periode) : '--'}</td>
+      <td>${periode.notes || '--'}</td>
+      <td>
+        <button type="button" class="bouton-modifier-periode" title="Modifier">✏️</button>
+        <button type="button" class="bouton-supprimer-periode" title="Supprimer">🗑️</button>
+      </td>
+    `;
+    ligne.querySelector('.bouton-modifier-periode').addEventListener('click', () => chargerPeriodeDansFormulaire(periode));
+    ligne.querySelector('.bouton-supprimer-periode').addEventListener('click', () => {
+      const confirmation = confirm(`Supprimer cette période (${LIBELLES_TYPE_PERIODE[periode.type] || periode.type}, ${formaterPlagePeriode(periode)}) ?`);
+      if (confirmation) supprimerPeriode(periode.id);
+    });
+    corps.appendChild(ligne);
+  });
+}
+
+function viderFormulairePeriode() {
+  document.getElementById('periode-type').value = 'pause';
+  document.getElementById('periode-date-debut').value = '';
+  document.getElementById('periode-date-fin').value = '';
+  document.getElementById('periode-notes').value = '';
+}
+
+function chargerPeriodeDansFormulaire(periode) {
+  periodeEnCoursEdition = periode.id;
+  document.getElementById('periode-type').value = periode.type || 'pause';
+  document.getElementById('periode-date-debut').value = periode.dateDebut || '';
+  document.getElementById('periode-date-fin').value = periode.dateFin || '';
+  document.getElementById('periode-notes').value = periode.notes || '';
+
+  document.getElementById('btn-ajouter-periode').textContent = 'Mettre à jour la période';
+  document.getElementById('btn-annuler-edition-periode').style.display = 'inline-block';
+  const details = document.getElementById('periode-nouvelle');
+  if (details) details.open = true;
+}
+
+function annulerEditionPeriode() {
+  periodeEnCoursEdition = null;
+  viderFormulairePeriode();
+  document.getElementById('btn-ajouter-periode').textContent = 'Ajouter la période';
+  document.getElementById('btn-annuler-edition-periode').style.display = 'none';
+  const details = document.getElementById('periode-nouvelle');
+  if (details) details.open = false;
+}
+
+function supprimerPeriode(id) {
+  db.collection('users').doc(uidActuel).collection('periodes').doc(id).delete()
+    .catch(erreur => console.error('Erreur de suppression de la période :', erreur));
+  if (periodeEnCoursEdition === id) annulerEditionPeriode();
+}
+
+document.getElementById('btn-ajouter-periode').addEventListener('click', function () {
+  const type = document.getElementById('periode-type').value;
+  const dateDebut = document.getElementById('periode-date-debut').value;
+  const dateFin = document.getElementById('periode-date-fin').value;
+  const notes = document.getElementById('periode-notes').value.trim();
+  const message = document.getElementById('periodes-message');
+
+  if (!dateDebut || !dateFin) {
+    message.textContent = '❌ La date de début et la date de fin sont obligatoires.';
+    message.style.display = 'block';
+    return;
+  }
+  if (dateFin < dateDebut) {
+    message.textContent = '❌ La date de fin ne peut pas être avant la date de début.';
+    message.style.display = 'block';
+    return;
+  }
+
+  const id = periodeEnCoursEdition || ('periode-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+  const periode = { id, type, dateDebut, dateFin, notes };
+  const enEdition = periodeEnCoursEdition !== null;
+
+  db.collection('users').doc(uidActuel).collection('periodes').doc(id).set(periode)
+    .then(() => {
+      message.textContent = enEdition ? '✅ Période mise à jour.' : '✅ Période ajoutée.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+      annulerEditionPeriode();
+    })
+    .catch(erreur => {
+      console.error('Erreur d\'enregistrement de la période :', erreur);
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
+
+document.getElementById('btn-annuler-edition-periode').addEventListener('click', annulerEditionPeriode);
+
+// ============================================================
+// RÈGLE SAISONNIÈRE (ajoutée le 06/10/2026)
+// Simple indicateur, purement informatif : à partir de la date du jour,
+// indique si on est en saison "extérieur" (course à pied en sentier/route
+// extérieure, vélo extérieur) ou en saison "hiver" (course à pied en
+// intérieur/tapis ou route déneigée, substitution ski de fond/hors-piste
+// possible à charge équivalente — voir la section "équivalence de charge
+// croisée" ci-dessous). Dates pivots FIXES (section 4 du document de
+// référence `plan-entrainement-2027.md`, pas une météo en direct) : calées
+// sur ce que montre déjà l'historique Strava de l'utilisateur (transition
+// observée chaque année autour de mi-avril et mi-novembre). Scope validé
+// avec l'utilisateur : un simple indicateur affiché sur la page Plan, qui
+// ne modifie RIEN ailleurs dans l'app (ni le sport par défaut des
+// séances-types ci-dessous, ni aucun autre calcul).
+// ============================================================
+
+function determinerSaison(date) {
+  const mois = date.getMonth() + 1; // 1 (janvier) à 12 (décembre)
+  const jour = date.getDate();
+  const apresDebutExterieur = mois > 4 || (mois === 4 && jour >= 15);
+  const avantDebutHiver = mois < 11 || (mois === 11 && jour < 15);
+  return (apresDebutExterieur && avantDebutHiver) ? 'exterieur' : 'hiver';
+}
+
+const LIBELLES_SAISON = {
+  exterieur: '🌞 Saison extérieur (mi-avril → mi-novembre)',
+  hiver: '❄️ Saison hiver (mi-novembre → mi-avril)'
+};
+const DESCRIPTIONS_SAISON = {
+  exterieur: 'Course à pied en sentier/route extérieure et vélo extérieur privilégiés.',
+  hiver: 'Course à pied en intérieur (tapis) ou route déneigée, musculation en salle, natation. Les sorties extérieures hivernales (ski de fond, ski hors-piste) restent encouragées quand la neige/les conditions le permettent, en remplacement d\'une séance prévue à charge équivalente plutôt qu\'en ajout — voir "Équivalence de charge croisée" dans les séances-types ci-dessous.'
+};
+
+function afficherIndicateurSaison() {
+  const zone = document.getElementById('indicateur-saison');
+  if (!zone) return;
+  const saison = determinerSaison(new Date());
+  zone.innerHTML = `<strong>${LIBELLES_SAISON[saison]}</strong> — ${DESCRIPTIONS_SAISON[saison]}`;
+}
+
+// ============================================================
+// SEMAINES-TYPES DE RÉFÉRENCE + ÉQUIVALENCE DE CHARGE CROISÉE TRIMP
+// (ajoutées le 06/10/2026 — 2e morceau de cette étape de la phase 2, après
+// les objectifs/frise et les périodes spécifiques)
+//
+// Scope validé avec l'utilisateur (questions de clarification) : un MODÈLE
+// DE RÉFÉRENCE par type de bloc de la frise (pas un calendrier jour par
+// jour généré sur 15 mois — le document de phase 1 déconseille justement
+// cette rigidité, section 6 : "illustration de la logique, pas un
+// calendrier figé"), avec pour chaque séance-type une fourchette de charge
+// CIBLE en TRIMP affichée à titre de repère (section 5 du document) — pas
+// encore de validation automatique contre une activité réellement
+// enregistrée (ça demanderait de pouvoir rattacher une activité à une
+// séance prévue, pas fait dans cette étape), ni de sport par défaut qui
+// changerait tout seul selon la saison (indicateur ci-dessus, volontairement
+// indépendant) : à l'utilisateur de combiner les deux à la lecture.
+//
+// La fourchette de TRIMP cible n'est PAS une valeur fixe codée en dur :
+// comme le reste de la charge d'entraînement dans cet outil, elle est
+// recalculée à la volée à partir des RÉGLAGES FC et des ZONES de
+// l'utilisateur (en réutilisant calculerCharge(), exactement comme pour une
+// vraie activité) — donc personnalisée, et toujours à jour si ces réglages
+// changent (voir les appels ajoutés dans demarrerEcouteReglages/
+// demarrerEcouteVO2max plus haut).
+// ============================================================
+
+const TYPES_SEANCE = {
+  repos:            { libelle: 'Repos',                       sportDefaut: null,                          zone: null, dureeMin: 0,   dureeMax: 0,   substituts: [] },
+  renforcement:     { libelle: 'Renforcement (musculation)',  sportDefaut: 'Musculation',                  zone: null, dureeMin: 45,  dureeMax: 60,  substituts: [] },
+  recup_active:     { libelle: 'Récupération active',         sportDefaut: 'Course à pied très facile',    zone: 0,    dureeMin: 20,  dureeMax: 35,  substituts: ['Natation', 'Vélo très facile', 'Marche'] },
+  endurance_facile: { libelle: 'Endurance facile',             sportDefaut: 'Course à pied',                zone: 1,    dureeMin: 30,  dureeMax: 45,  substituts: ['Natation', 'Vélo facile', 'Marche'] },
+  seuil_tempo:      { libelle: 'Seuil / tempo',                sportDefaut: 'Course à pied (route/tapis)',  zone: 2,    dureeMin: 40,  dureeMax: 60,  substituts: ['Ski de fond en continu soutenu', 'Vélo en tempo'] },
+  fractionne_vma:   { libelle: 'Fractionné VMA / côtes',       sportDefaut: 'Course à pied',                zone: 3,    dureeMin: 35,  dureeMax: 50,  substituts: ['Ski de fond en alternance soutenu/récup', 'Côtes à vélo'] },
+  sortie_longue:    { libelle: 'Sortie longue endurance',      sportDefaut: 'Course à pied',                zone: 1,    dureeMin: 75,  dureeMax: 120, substituts: ['Ski de fond (+10-20% de durée)', 'Vélo (+10-20% de durée)'] },
+  trail_modere:     { libelle: 'Trail modéré',                 sportDefaut: 'Trail',                        zone: 1,    dureeMin: 60,  dureeMax: 90,  substituts: ['Vélo (+10-20% de durée)'] },
+  cote_puissance:   { libelle: 'Côtes / puissance',            sportDefaut: 'Course à pied ou trail',       zone: 3,    dureeMin: 35,  dureeMax: 50,  substituts: ['Côtes à vélo'] },
+  intensite_courte: { libelle: 'Touche d\'intensité courte',   sportDefaut: 'Course à pied',                zone: 2,    dureeMin: 20,  dureeMax: 30,  substituts: [] },
+  weekend_choc_j1:  { libelle: 'Weekend choc — vendredi soir (simulation étape nocturne)', sportDefaut: 'Trail/route', zone: 1, dureeMin: 90,  dureeMax: 120, substituts: [] },
+  weekend_choc_j2:  { libelle: 'Weekend choc — samedi (grosse sortie longue)',             sportDefaut: 'Trail',       zone: 1, dureeMin: 210, dureeMax: 300, substituts: [] },
+  weekend_choc_j3:  { libelle: 'Weekend choc — dimanche (jambes fatiguées)',               sportDefaut: 'Trail',       zone: 1, dureeMin: 100, dureeMax: 150, substituts: [] }
+};
+
+// Pour chaque type de bloc produit par calculerFrise (voir plus haut), un ou
+// plusieurs "patrons" de semaine. La plupart n'en ont qu'un seul — le bloc
+// "spécifique" en a deux : la semaine normale ET le schéma "weekend choc",
+// qui ne revient que 2 à 3 fois dans tout le bloc (section 3.4 du
+// document), pas chaque semaine. "entretien" réutilise exactement le même
+// patron que "base" (même structure de semaine, juste un nom de bloc
+// différent). "progressif"/"assimilation" (sous-cycles de "base"/
+// "entretien") et "course" n'ont pas d'entrée ici : voir le texte de repli
+// dans afficherSeancesTypes() ci-dessous.
+const SEANCES_TYPES_PAR_BLOC = {
+  base: [{
+    jours: [
+      { label: 'Lundi', type: 'repos' },
+      { label: 'Mardi', type: 'renforcement' },
+      { label: 'Mercredi', type: 'seuil_tempo' },
+      { label: 'Jeudi', type: 'recup_active' },
+      { label: 'Vendredi', type: 'endurance_facile' },
+      { label: 'Samedi', type: 'sortie_longue' },
+      { label: 'Dimanche', type: 'repos' }
+    ]
+  }],
+  specifique: [
+    {
+      nom: 'Semaine normale',
+      jours: [
+        { label: 'Lundi', type: 'repos' },
+        { label: 'Mardi', type: 'renforcement' },
+        { label: 'Mercredi', type: 'cote_puissance' },
+        { label: 'Jeudi', type: 'recup_active' },
+        { label: 'Vendredi', type: 'trail_modere' },
+        { label: 'Samedi', type: 'sortie_longue' },
+        { label: 'Dimanche', type: 'repos' }
+      ]
+    },
+    {
+      nom: 'Weekend choc (2 à 3 fois dans ce bloc, dans les 6-8 dernières semaines avant la course)',
+      jours: [
+        { label: 'Vendredi soir', type: 'weekend_choc_j1' },
+        { label: 'Samedi', type: 'weekend_choc_j2' },
+        { label: 'Dimanche', type: 'weekend_choc_j3' }
+      ]
+    }
+  ],
+  transition_courte: [{
+    jours: [
+      { label: 'Lundi', type: 'repos' },
+      { label: 'Mardi', type: 'renforcement' },
+      { label: 'Mercredi', type: 'cote_puissance' },
+      { label: 'Jeudi', type: 'recup_active' },
+      { label: 'Vendredi', type: 'endurance_facile' },
+      { label: 'Samedi', type: 'sortie_longue' },
+      { label: 'Dimanche', type: 'repos' }
+    ]
+  }],
+  taper: [{
+    nom: 'Ordre indicatif — la semaine du taper se cale sur la date de la course, pas forcément sur lundi-dimanche',
+    jours: [
+      { label: 'J-6 / J-5', type: 'endurance_facile' },
+      { label: 'J-4', type: 'repos' },
+      { label: 'J-3', type: 'intensite_courte' },
+      { label: 'J-2', type: 'repos' },
+      { label: 'J-1', type: 'recup_active' }
+    ]
+  }],
+  recup: [{
+    jours: [
+      { label: 'Premiers jours', type: 'repos' },
+      { label: 'Milieu de la récup', type: 'recup_active' },
+      { label: 'Fin de la récup', type: 'endurance_facile' }
+    ]
+  }]
+};
+
+// Calcule une fourchette de TRIMP cible pour une zone FC + une plage de
+// durée, en réutilisant calculerCharge() — exactement comme pour une
+// activité réellement enregistrée, donc personnalisée aux réglages FC/
+// zones de l'utilisateur. Renvoie null si ces réglages (Paramètres) ne sont
+// pas complets.
+function calculerTrimpCible(indexZone, dureeMinMinutes, dureeMaxMinutes) {
+  if (indexZone === null) return null;
+  const { fcRepos, fcMax } = lireReglages();
+  const { limites } = lireDonneesVO2max();
+  if (fcRepos === null || fcMax === null || limites.some(l => l === null)) return null;
+
+  const bornesBasses = [fcRepos, ...limites]; // bas de Z1..Z5
+  const bornesHautes = [...limites, fcMax];   // haut de Z1..Z5
+  const trimpBas = calculerCharge({ fcMoyenne: bornesBasses[indexZone], dureeSecondes: dureeMinMinutes * 60 });
+  const trimpHaut = calculerCharge({ fcMoyenne: bornesHautes[indexZone], dureeSecondes: dureeMaxMinutes * 60 });
+  if (trimpBas === null || trimpHaut === null) return null;
+  return [Math.min(trimpBas, trimpHaut), Math.max(trimpBas, trimpHaut)];
+}
+
+function formaterLigneSeanceType(entree) {
+  const typeSeance = TYPES_SEANCE[entree.type];
+  if (!typeSeance) return '';
+  if (entree.type === 'repos') {
+    return `<li><strong>${entree.label} :</strong> Repos</li>`;
+  }
+
+  const duree = typeSeance.dureeMin === typeSeance.dureeMax
+    ? `~${typeSeance.dureeMin} min`
+    : `${typeSeance.dureeMin}-${typeSeance.dureeMax} min`;
+  const zoneTexte = typeSeance.zone !== null ? NOMS_ZONES[typeSeance.zone] : null;
+  let trimpTexte = '';
+  if (typeSeance.zone !== null) {
+    const trimpCible = calculerTrimpCible(typeSeance.zone, typeSeance.dureeMin, typeSeance.dureeMax);
+    trimpTexte = trimpCible
+      ? ` · charge cible ~${trimpCible[0]}-${trimpCible[1]} TRIMP`
+      : ' · charge cible : N/A (configure tes réglages FC et tes zones dans Paramètres)';
+  }
+  const substitutsTexte = typeSeance.substituts.length > 0
+    ? ` · substituts à charge équivalente : ${typeSeance.substituts.join(', ')}`
+    : '';
+
+  return `<li><strong>${entree.label} :</strong> ${typeSeance.libelle} (${typeSeance.sportDefaut}${zoneTexte ? ', ' + zoneTexte : ''}, ${duree})${trimpTexte}${substitutsTexte}</li>`;
+}
+
+function construireBlocSeanceType(nomBloc, patrons) {
+  const titre = LIBELLES_BLOC_FRISE[nomBloc] || nomBloc;
+  let html = `<div class="seance-type-bloc"><h3>${titre}</h3>`;
+  patrons.forEach(patron => {
+    if (patron.nom) html += `<p class="seance-type-nom-patron">${patron.nom}</p>`;
+    html += `<ul class="seance-type-liste">${patron.jours.map(formaterLigneSeanceType).join('')}</ul>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function afficherSeancesTypes() {
+  const zone = document.getElementById('zone-seances-types');
+  if (!zone) return;
+
+  let html = '';
+  ['base', 'specifique', 'transition_courte', 'taper', 'recup'].forEach(nomBloc => {
+    html += construireBlocSeanceType(nomBloc, SEANCES_TYPES_PAR_BLOC[nomBloc]);
+  });
+  // "Entretien" suit exactement la même structure que "Base" (voir la note
+  // dans SEANCES_TYPES_PAR_BLOC ci-dessus) : même patron, juste un titre
+  // différent — pas dupliqué dans les données, seulement à l'affichage.
+  html += construireBlocSeanceType('entretien', SEANCES_TYPES_PAR_BLOC['base']);
+  // "progressif"/"assimilation" ne sont pas des structures à part : ce sont
+  // les mêmes semaines que "Base / entretien", qui montent en charge
+  // progressivement puis se déchargent (voir decouperCyclesProgressifs plus
+  // haut) — pas de patron dupliqué, juste une note explicative.
+  html += `<div class="seance-type-bloc"><h3>Cycles progressifs / assimilation</h3><p class="description">Pas un patron à part : ce sont les mêmes semaines que "Base / entretien" ci-dessus, avec un volume qui augmente sur 3 semaines (schéma 3:1, voir la frise plus haut) puis une semaine de décharge à volume réduit.</p></div>`;
+  html += `<div class="seance-type-bloc"><h3>Course</h3><p class="description">Pas de semaine-type ici : se référer au format de l'objectif (distance, D+, nombre de jours) dans le tableau "Objectifs" plus haut.</p></div>`;
+
+  zone.innerHTML = html;
+}
