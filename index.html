@@ -696,14 +696,14 @@
     </section>
 
     <!-- Semaines-types de référence + équivalence de charge croisée TRIMP
-         (06/10/2026) : un modèle PAR TYPE DE BLOC (pas un calendrier jour
-         par jour — voir le document de référence, section 6, qui déconseille
-         justement cette rigidité), avec une fourchette de charge cible en
-         TRIMP par séance-type, calculée à la volée à partir des réglages FC/
-         zones (Paramètres) — voir calculerTrimpCible dans script.js. -->
+         (06/10/2026, simplifiées le même jour) : seulement 3 semaines-types
+         (Base / entretien, Assimilation, Bloc spécifique), chacune sous
+         forme de LISTE d'activités à planifier dans la semaine (pas de jour
+         assigné) plutôt qu'un calendrier jour par jour — voir
+         SEANCES_TYPES_PAR_BLOC dans script.js. -->
     <section id="plan-seances-types">
       <h2>🗓️ Semaines-types de référence</h2>
-      <p class="description">Un modèle de semaine par type de bloc de la frise ci-dessus — un repère, pas un calendrier figé jour par jour (le plan reste organisé en blocs fonctionnels, voir le document de référence). Chaque séance-type porte son sport par défaut, sa zone FC visée, une fourchette de charge cible en TRIMP (calculée à partir de tes réglages FC/zones dans Paramètres) et, le cas échéant, des substituts acceptés à charge équivalente — à combiner avec l'indicateur de saison ci-dessus pour choisir le sport réellement adapté à la période de l'année.</p>
+      <p class="description">À planifier toi-même sur tes jours selon ton emploi du temps. Charge cible en TRIMP calculée à partir de tes réglages FC/zones (Paramètres), substituts à charge équivalente le cas échéant.</p>
       <div id="zone-seances-types"></div>
     </section>
 
