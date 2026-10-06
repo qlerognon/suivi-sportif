@@ -701,7 +701,7 @@ h1 {
 .frise-base, .frise-entretien { background-color: #a8c5da; }
 .frise-progressif { background-color: #a8c5da; }
 .frise-assimilation { background-color: #5a7a94; }
-.frise-specifique, .frise-transition_courte { background-color: #4f8fc0; }
+.frise-specifique { background-color: #4f8fc0; }
 .frise-taper { background-color: #e8a33d; }
 .frise-course { background-color: #c0392b; flex-grow: 0.6 !important; }
 .frise-recup { background-color: #8fbf8f; }
@@ -760,18 +760,17 @@ h1 {
   margin: 0 0 6px;
   color: #2c3e50;
 }
-.seance-type-nom-patron {
-  font-size: 0.85em;
-  font-weight: bold;
-  color: #555;
-  margin: 10px 0 4px;
-}
 .seance-type-liste {
   margin: 4px 0 0;
   padding-left: 20px;
   font-size: 0.85em;
   color: #555;
   line-height: 1.5;
+}
+.seance-type-note {
+  margin: 8px 0 0;
+  font-size: 0.82em;
+  color: #777;
 }
 
 /* --- Segments (page Records) --- */
