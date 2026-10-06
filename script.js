@@ -490,15 +490,25 @@ function afficherActivite(activite) {
   // estSportSansDistance plus haut) : on cache ces cases plutôt que
   // d'afficher des zéros trompeurs.
   const sansDistance = estSportSansDistance(activite);
-  ['stat-card-distance', 'stat-card-allure', 'stat-card-vap', 'stat-card-denivele'].forEach(id => {
+  const estVelo = estActiviteVelo(activite);
+  ['stat-card-distance', 'stat-card-allure', 'stat-card-denivele'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = sansDistance ? 'none' : '';
   });
+  // La VAP (vitesse ajustée à la pente) est une formule pensée pour la
+  // course à pied : masquée pour le vélo (06/10/2026, demande de
+  // l'utilisateur), comme déjà pour la musculation ci-dessus.
+  document.getElementById('stat-card-vap').style.display = (sansDistance || estVelo) ? 'none' : '';
   if (!sansDistance) {
     document.getElementById('stat-distance').textContent = (activite.distanceMetres / 1000).toFixed(2) + ' km';
-    document.getElementById('stat-allure').textContent = formatAllure(activite.allureMinParKm) + ' /km';
-    const vapMoyenne = calculerVAPMoyenneActivite(activite.points);
-    document.getElementById('stat-vap').textContent = vapMoyenne !== null ? formatAllure(vapMoyenne) + ' /km' : 'N/A';
+    document.getElementById('stat-label-allure').textContent = estVelo ? 'Vitesse moyenne' : 'Allure moyenne';
+    document.getElementById('stat-allure').textContent = estVelo
+      ? formaterVitesseKmh(calculerVitesseKmh(activite.allureMinParKm))
+      : formatAllure(activite.allureMinParKm) + ' /km';
+    if (!estVelo) {
+      const vapMoyenne = calculerVAPMoyenneActivite(activite.points);
+      document.getElementById('stat-vap').textContent = vapMoyenne !== null ? formatAllure(vapMoyenne) + ' /km' : 'N/A';
+    }
     document.getElementById('stat-denivele').textContent = activite.deniveleDPlus + ' m';
   }
 
@@ -617,6 +627,38 @@ function typeParDefautDepuisSportBrut(sportBrut) {
 // ce sport, plutôt que d'afficher des zéros trompeurs.
 function estSportSansDistance(activite) {
   return activite.typeActivite === 'musculation';
+}
+
+// Une activité est "vélo" si elle est classée comme telle (typeActivite),
+// ou — tant qu'elle n'a pas encore été classée — si son sport BRUT du .tcx
+// est "Biking" (même repli que libelleTypeActivite/typeParDefautDepuisSportBrut
+// plus haut). Sert à adapter l'affichage allure/VAP -> vitesse (06/10/2026,
+// demande de l'utilisateur : la vitesse en km/h est plus représentative que
+// l'allure en min/km pour le vélo).
+function estActiviteVelo(activite) {
+  if (activite.typeActivite) return activite.typeActivite === 'velo';
+  return activite.sport === 'Biking';
+}
+
+// Une activité "Course sur tapis" (voir TYPES_ACTIVITE) : seule cette
+// classification (jamais devinée depuis le sport brut, un tapis n'a pas
+// d'équivalent générique dans un .tcx) active la zone de correction
+// vitesse/pente par tour (06/10/2026) — voir afficherEditionTapis plus bas.
+function estActiviteTapis(activite) {
+  return activite.typeActivite === 'tapis';
+}
+
+// Convertit une allure (min/km) en vitesse (km/h) — l'inverse l'un de
+// l'autre. Renvoie null plutôt qu'une valeur infinie/aberrante si l'allure
+// est manquante ou invalide (pas de distance connue, division par zéro...).
+function calculerVitesseKmh(allureMinParKm) {
+  if (allureMinParKm === null || allureMinParKm === undefined || !Number.isFinite(allureMinParKm) || allureMinParKm <= 0) return null;
+  return 60 / allureMinParKm;
+}
+
+// Formate une vitesse (km/h) pour l'affichage, ou "N/A" si elle est inconnue.
+function formaterVitesseKmh(vitesseKmh) {
+  return vitesseKmh !== null && Number.isFinite(vitesseKmh) ? vitesseKmh.toFixed(1) + ' km/h' : 'N/A';
 }
 
 // ============================================================
@@ -1778,7 +1820,52 @@ function calculerVAPMoyenneActivite(points) {
 // Construit le graphique en barres superposées (allure + VAP) commun aux
 // modes "par km" et "par tour" : seul le DÉCOUPAGE en tranches change entre
 // les deux (voir afficherGraphiqueAllure), l'affichage lui-même est identique.
-function creerGraphiqueBarresAllureVAP(ctx, labels, donnees) {
+// Pour le vélo (06/10/2026, demande de l'utilisateur), `estVelo` fait
+// basculer vers une SEULE barre en vitesse (km/h) plutôt que les deux barres
+// allure + VAP habituelles : la VAP n'a pas de sens pour ce sport (voir
+// calculerVAP, formule pensée pour la course à pied), et la vitesse est plus
+// représentative que l'allure pour le vélo.
+function creerGraphiqueBarresAllureVAP(ctx, labels, donnees, estVelo) {
+  if (estVelo) {
+    const donneesVitesse = donnees.map(d => calculerVitesseKmh(d.allure) || 0);
+    const yMaxVitesse = Math.max(...donneesVitesse, 0) * 1.15;
+
+    return new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Vitesse (km/h)',
+            data: donneesVitesse,
+            backgroundColor: 'rgba(75, 192, 192, 0.6)',
+            borderColor: 'rgb(75, 192, 192)',
+            borderWidth: 1
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: true, position: 'top' },
+          tooltip: {
+            callbacks: {
+              label: ctx => 'Vitesse : ' + Number(ctx.raw).toFixed(1) + ' km/h'
+            }
+          }
+        },
+        scales: {
+          y: {
+            min: 0,
+            max: yMaxVitesse > 0 ? yMaxVitesse : 1,
+            ticks: { callback: v => Number(v).toFixed(1) },
+            title: { display: true, text: 'Vitesse (km/h)' }
+          }
+        }
+      }
+    });
+  }
+
   const maxAllure = Math.max(...donnees.map(d => d.allure), 0);
   const maxVap = Math.max(...donnees.map(d => d.vap), 0);
   const yMax = Math.max(maxAllure, maxVap) * 1.15;
@@ -1831,8 +1918,11 @@ function creerGraphiqueBarresAllureVAP(ctx, labels, donnees) {
 
 // Affiche la courbe/les barres d'allure (instantanée, par km ou par tour).
 // `laps` (tableau des tours, voir parserTCX) n'est nécessaire que pour le
-// mode "barreParLap" ; les autres modes l'ignorent.
-function afficherGraphiqueAllure(points, dureeSecondes, laps) {
+// mode "barreParLap" ; les autres modes l'ignorent. `estVelo` (06/10/2026)
+// fait basculer les trois modes en vitesse (km/h) plutôt qu'allure (min/km),
+// sans la VAP — voir creerGraphiqueBarresAllureVAP pour les modes "par km"/
+// "par tour", et plus bas dans cette fonction pour le mode instantané.
+function afficherGraphiqueAllure(points, dureeSecondes, laps, estVelo) {
   const ctx = document.getElementById('chartAllure').getContext('2d');
   if (chartAllureInstance) chartAllureInstance.destroy();
 
@@ -1896,7 +1986,7 @@ function afficherGraphiqueAllure(points, dureeSecondes, laps) {
         vap: data.vapPondereTotal / data.distTotaleKm
       }));
 
-    chartAllureInstance = creerGraphiqueBarresAllureVAP(ctx, donneesParKm.map(d => `Km ${d.km}`), donneesParKm);
+    chartAllureInstance = creerGraphiqueBarresAllureVAP(ctx, donneesParKm.map(d => `Km ${d.km}`), donneesParKm, estVelo);
     return;
   }
 
@@ -1974,7 +2064,7 @@ function afficherGraphiqueAllure(points, dureeSecondes, laps) {
         vap: data.vapPondereTotal / data.distTotaleKm
       }));
 
-    chartAllureInstance = creerGraphiqueBarresAllureVAP(ctx, donneesParLap.map(d => `Tour ${d.numeroLap + 1}`), donneesParLap);
+    chartAllureInstance = creerGraphiqueBarresAllureVAP(ctx, donneesParLap.map(d => `Tour ${d.numeroLap + 1}`), donneesParLap, estVelo);
     return;
   }
 
@@ -2004,7 +2094,10 @@ function afficherGraphiqueAllure(points, dureeSecondes, laps) {
     const allure = dureeMins / (distM / 1000);
 
     if (allure >= 2 && allure < 20) {
-      donneesInstantanees.push({ x: p2.tempsEcouleSecondes, y: allure });
+      // Vélo (06/10/2026) : on trace directement la VITESSE (km/h) plutôt
+      // que l'allure — plus intuitif pour ce sport (plus la courbe monte,
+      // plus on va vite, alors qu'en allure c'est l'inverse).
+      donneesInstantanees.push({ x: p2.tempsEcouleSecondes, y: estVelo ? calculerVitesseKmh(allure) : allure });
     }
 
     debutFenetre = i; // on repart d'ici pour la fenêtre suivante
@@ -2014,7 +2107,7 @@ function afficherGraphiqueAllure(points, dureeSecondes, laps) {
     type: 'line',
     data: {
       datasets: [{
-        label: 'Allure instantanée (min/km)',
+        label: estVelo ? 'Vitesse instantanée (km/h)' : 'Allure instantanée (min/km)',
         data: donneesInstantanees,
         parsing: false,
         borderColor: 'rgb(75, 192, 192)',
@@ -2030,7 +2123,7 @@ function afficherGraphiqueAllure(points, dureeSecondes, laps) {
       plugins: { legend: { display: true, position: 'top' } },
       scales: {
         x: optionsAxeTemps,
-        y: { beginAtZero: false, title: { display: true, text: 'Allure (min/km)' } }
+        y: { beginAtZero: false, title: { display: true, text: estVelo ? 'Vitesse (km/h)' : 'Allure (min/km)' } }
       }
     }
   });
@@ -2332,7 +2425,7 @@ function dessinerTableauActivites() {
       <td>${act.typeActivite ? libelleTypeActivite(act) : '<span class="texte-attenue">' + libelleTypeActivite(act) + '</span>'}</td>
       <td>${sansDistance ? 'N/A' : (act.distanceMetres / 1000).toFixed(2) + ' km'}</td>
       <td>${formatDuree(act.dureeSecondes)}</td>
-      <td>${sansDistance ? 'N/A' : formatAllure(act.allureMinParKm) + ' /km'}</td>
+      <td>${sansDistance ? 'N/A' : (estActiviteVelo(act) ? formaterVitesseKmh(calculerVitesseKmh(act.allureMinParKm)) : formatAllure(act.allureMinParKm) + ' /km')}</td>
       <td>${act.fcMoyenne ? act.fcMoyenne + ' bpm' : 'N/A'}</td>
       <td>${charge !== null ? charge : 'N/A'}</td>
       <td>${act.rpe ? act.rpe + '/10' : '--'}</td>
@@ -2431,6 +2524,14 @@ function afficherTableauLaps(activite) {
   const zone = document.getElementById('detail-laps-zone');
   const corps = document.getElementById('corps-tableau-laps');
   const laps = activite.laps || []; // tableau vide pour une activité sauvegardée avant cette fonctionnalité
+  const estVelo = estActiviteVelo(activite);
+
+  // En-tête de la colonne "Allure"/"Vitesse" : toutes les lignes de CE
+  // tableau appartiennent à la même activité, donc au même sport — on peut
+  // relabelliser l'en-tête entier sans ambiguïté (contrairement au tableau
+  // Historique, qui mélange plusieurs sports dans une seule colonne).
+  const entete = document.getElementById('th-lap-allure');
+  if (entete) entete.textContent = estVelo ? 'Vitesse' : 'Allure';
 
   // On n'affiche le tableau que s'il y a VRAIMENT plusieurs tours : avec un
   // seul tour (aucun appui sur "tour" pendant la séance), il ne dirait rien
@@ -2443,17 +2544,196 @@ function afficherTableauLaps(activite) {
   corps.innerHTML = '';
   laps.forEach((lap, i) => {
     const ligne = document.createElement('tr');
+    const celluleAllure = estVelo
+      ? formaterVitesseKmh(calculerVitesseKmh(lap.allureMinParKm))
+      : (lap.allureMinParKm !== null ? formatAllure(lap.allureMinParKm) + ' /km' : 'N/A');
     ligne.innerHTML = `
       <td>${i + 1}</td>
       <td>${(lap.distanceMetres / 1000).toFixed(2)} km</td>
       <td>${formatDuree(lap.dureeSecondes)}</td>
-      <td>${lap.allureMinParKm !== null ? formatAllure(lap.allureMinParKm) + ' /km' : 'N/A'}</td>
+      <td>${celluleAllure}</td>
       <td>${lap.fcMoyenne ? lap.fcMoyenne + ' bpm' : 'N/A'}</td>
     `;
     corps.appendChild(ligne);
   });
   zone.style.display = 'block';
 }
+
+// ============================================================
+// COURSE SUR TAPIS : correction vitesse/pente par tour (06/10/2026)
+// Un tapis de course n'a pas de GPS : la distance/l'allure/le D+ lus dans le
+// .tcx à l'import sont souvent approximatifs (ou carrément à plat, un tapis
+// n'enregistrant aucune altitude). Cette zone permet de les corriger à la
+// main, tour par tour, en indiquant la VITESSE (km/h) et la PENTE (%)
+// réglées sur le tapis pendant chaque tour :
+// - la distance du tour est RECALCULÉE automatiquement (vitesse × durée du
+//   tour, qui elle ne change pas) plutôt que saisie indépendamment, pour
+//   qu'elle ne puisse jamais devenir incohérente avec la vitesse affichée ;
+// - le D+ de la séance ne compte QUE les tours à pente POSITIVE (une pente
+//   nulle ou négative ne retire rien : pas de D- suivi séparément).
+// Contrairement au tableau des tours ci-dessus (afficherTableauLaps, masqué
+// s'il n'y a qu'un seul tour), cette zone reste TOUJOURS visible pour une
+// activité classée "Course sur tapis" (voir estActiviteTapis), y compris
+// avec un seul tour — le cas le plus fréquent, aucun appui sur "tour"
+// pendant la séance.
+// ============================================================
+
+// Les tours à éditer : ceux déjà enregistrés pour cette activité, ou — si
+// elle n'en a aucun (fichier sans <Lap> détaillé, ou activité créée avant
+// cette fonctionnalité) — un tour UNIQUE construit à partir des totaux de
+// l'activité, pour que l'édition reste possible même dans ce cas.
+function lapsPourEditionTapis(activite) {
+  if (activite.laps && activite.laps.length > 0) return activite.laps;
+  return [{
+    dureeSecondes: activite.dureeSecondes,
+    distanceMetres: activite.distanceMetres,
+    calories: activite.calories,
+    fcMoyenne: activite.fcMoyenne,
+    allureMinParKm: activite.allureMinParKm,
+    vitesseTapisKmh: null,
+    penteTapisPourcent: null
+  }];
+}
+
+// Construit/affiche le tableau d'édition : un tour par ligne, avec une
+// vitesse et une pente pré-remplies (valeur déjà enregistrée si ce tour a
+// déjà été corrigé une fois, sinon une estimation de départ à partir de
+// l'allure déjà connue — et une pente à plat par défaut, faute de mieux).
+function afficherEditionTapis(activite) {
+  const zone = document.getElementById('detail-tapis-zone');
+  if (!zone) return;
+
+  if (!estActiviteTapis(activite)) {
+    zone.style.display = 'none';
+    return;
+  }
+
+  const laps = lapsPourEditionTapis(activite);
+  const corps = document.getElementById('corps-tableau-tapis');
+  corps.innerHTML = '';
+
+  laps.forEach((lap, i) => {
+    const vitesseInitiale = typeof lap.vitesseTapisKmh === 'number'
+      ? lap.vitesseTapisKmh
+      : (calculerVitesseKmh(lap.allureMinParKm) || 0);
+    const penteInitiale = typeof lap.penteTapisPourcent === 'number' ? lap.penteTapisPourcent : 0;
+
+    const ligne = document.createElement('tr');
+    ligne.dataset.dureeSecondes = String(lap.dureeSecondes || 0);
+    ligne.innerHTML = `
+      <td>${i + 1}</td>
+      <td>${formatDuree(lap.dureeSecondes || 0)}</td>
+      <td><input type="number" class="tapis-input-vitesse" min="0" step="0.1" value="${vitesseInitiale.toFixed(1)}" style="width: 70px;"></td>
+      <td><input type="number" class="tapis-input-pente" step="0.1" value="${penteInitiale.toFixed(1)}" style="width: 70px;"></td>
+      <td class="tapis-cell-distance">--</td>
+      <td class="tapis-cell-denivele">--</td>
+    `;
+    corps.appendChild(ligne);
+  });
+
+  zone.style.display = 'block';
+  recalculerApercuTapis();
+}
+
+// Relit les champs vitesse/pente actuellement saisis et recalcule, pour
+// CHAQUE tour, la distance (vitesse × durée) et le D+ (uniquement si pente >
+// 0), ainsi que les totaux — appelé à chaque frappe (voir l'écouteur "input"
+// plus bas), avant même d'enregistrer, pour un aperçu immédiat.
+function recalculerApercuTapis() {
+  const corps = document.getElementById('corps-tableau-tapis');
+  if (!corps) return;
+
+  let distanceTotaleM = 0;
+  let deniveleTotalM = 0;
+
+  Array.from(corps.children).forEach(ligne => {
+    const dureeSecondes = parseFloat(ligne.dataset.dureeSecondes) || 0;
+    const vitesse = parseFloat(ligne.querySelector('.tapis-input-vitesse').value) || 0;
+    const pente = parseFloat(ligne.querySelector('.tapis-input-pente').value) || 0;
+
+    // vitesse (km/h) × durée (h) × 1000 = distance en mètres
+    const distanceLapM = vitesse * 1000 * (dureeSecondes / 3600);
+    const deniveleLapM = pente > 0 ? distanceLapM * (pente / 100) : 0;
+
+    ligne.querySelector('.tapis-cell-distance').textContent = (distanceLapM / 1000).toFixed(2) + ' km';
+    ligne.querySelector('.tapis-cell-denivele').textContent = Math.round(deniveleLapM) + ' m';
+
+    distanceTotaleM += distanceLapM;
+    deniveleTotalM += deniveleLapM;
+  });
+
+  document.getElementById('tapis-total-distance').textContent = (distanceTotaleM / 1000).toFixed(2) + ' km';
+  document.getElementById('tapis-total-denivele').textContent = Math.round(deniveleTotalM) + ' m';
+}
+
+// Aperçu recalculé à chaque frappe dans un champ vitesse/pente, même avant
+// d'enregistrer (délégation sur le tbody, qui reste le même élément d'un
+// rafraîchissement à l'autre : pas besoin de ré-attacher cet écouteur).
+document.getElementById('corps-tableau-tapis').addEventListener('input', recalculerApercuTapis);
+
+// Enregistre les corrections dans Firestore : les tours (avec leur nouvelle
+// vitesse/pente/distance/allure), et les totaux de l'activité qui en
+// découlent (distance, D+, allure moyenne — la durée totale, elle, ne
+// change jamais : on ne corrige que vitesse/pente, jamais le temps réel).
+function enregistrerCorrectionsTapis(idActivite, laps, distanceMetres, deniveleDPlus, dureeSecondes) {
+  const allureMinParKm = distanceMetres > 0 ? (dureeSecondes / 60) / (distanceMetres / 1000) : null;
+  const deniveleArrondi = Math.round(deniveleDPlus);
+  return db.collection('users').doc(uidActuel).collection('activites').doc(idActivite)
+    .update({
+      laps: laps,
+      distanceMetres: Math.round(distanceMetres),
+      deniveleDPlus: deniveleArrondi,
+      allureMinParKm: allureMinParKm
+    })
+    .then(() => ({ laps, distanceMetres: Math.round(distanceMetres), deniveleDPlus: deniveleArrondi, allureMinParKm }))
+    .catch(erreur => {
+      console.error('Erreur d\'enregistrement des corrections tapis :', erreur);
+      throw erreur;
+    });
+}
+
+document.getElementById('btn-valider-tapis').addEventListener('click', function () {
+  if (activiteEnCoursAffichage === null) return;
+  const act = activitesEnMemoire[activiteEnCoursAffichage];
+  if (!act) return;
+  const message = document.getElementById('tapis-message');
+
+  const corps = document.getElementById('corps-tableau-tapis');
+  const lapsOriginaux = lapsPourEditionTapis(act);
+  const lapsCorriges = Array.from(corps.children).map((ligne, i) => {
+    const dureeSecondes = parseFloat(ligne.dataset.dureeSecondes) || 0;
+    const vitesse = parseFloat(ligne.querySelector('.tapis-input-vitesse').value) || 0;
+    const pente = parseFloat(ligne.querySelector('.tapis-input-pente').value) || 0;
+    const distanceLapM = vitesse * 1000 * (dureeSecondes / 3600);
+    const lapOriginal = lapsOriginaux[i] || {};
+    return {
+      dureeSecondes: dureeSecondes,
+      distanceMetres: Math.round(distanceLapM),
+      calories: lapOriginal.calories || 0,
+      fcMoyenne: typeof lapOriginal.fcMoyenne === 'number' ? lapOriginal.fcMoyenne : null,
+      allureMinParKm: distanceLapM > 0 ? (dureeSecondes / 60) / (distanceLapM / 1000) : null,
+      vitesseTapisKmh: vitesse,
+      penteTapisPourcent: pente
+    };
+  });
+
+  const distanceTotaleM = lapsCorriges.reduce((total, l) => total + l.distanceMetres, 0);
+  const deniveleTotalM = lapsCorriges.reduce((total, l) => total + (l.penteTapisPourcent > 0 ? l.distanceMetres * (l.penteTapisPourcent / 100) : 0), 0);
+  const dureeTotaleSecondes = lapsCorriges.reduce((total, l) => total + l.dureeSecondes, 0);
+
+  enregistrerCorrectionsTapis(act.id, lapsCorriges, distanceTotaleM, deniveleTotalM, dureeTotaleSecondes)
+    .then(valeursEnregistrees => {
+      Object.assign(act, valeursEnregistrees);
+      rafraichirDetailActivite(activiteEnCoursAffichage); // rafraîchit sans rouvrir/refermer le panneau
+      message.textContent = '✅ Corrections enregistrées.';
+      message.style.display = 'block';
+      setTimeout(() => { message.style.display = 'none'; }, 3000);
+    })
+    .catch(erreur => {
+      message.textContent = `❌ Échec de l'enregistrement (${erreur.code || erreur.message || 'erreur inconnue'}). Vérifie ta connexion et les règles de sécurité Firestore (voir firebase-config.js).`;
+      message.style.display = 'block';
+    });
+});
 
 // ============================================================
 // FONCTION : afficherDetailActivite
@@ -2507,25 +2787,35 @@ function rafraichirDetailActivite(index) {
   // cache les blocs qui n'ont pas de sens pour ce sport plutôt que
   // d'afficher des zéros trompeurs (voir estSportSansDistance plus haut).
   const sansDistance = estSportSansDistance(act);
-  ['detail-p-distance', 'detail-p-allure', 'detail-p-vap', 'detail-p-denivele', 'detail-bloc-carte', 'detail-bloc-graph-denivele', 'detail-bloc-graph-allure'].forEach(id => {
+  const estVelo = estActiviteVelo(act);
+  ['detail-p-distance', 'detail-p-allure', 'detail-p-denivele', 'detail-bloc-carte', 'detail-bloc-graph-denivele', 'detail-bloc-graph-allure'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = sansDistance ? 'none' : '';
   });
+  // VAP masquée pour le vélo (voir afficherActivite plus haut pour le même
+  // raisonnement côté récap post-import).
+  document.getElementById('detail-p-vap').style.display = (sansDistance || estVelo) ? 'none' : '';
 
   if (!sansDistance) {
     document.getElementById('detail-distance').textContent = (act.distanceMetres / 1000).toFixed(2) + ' km';
-    document.getElementById('detail-allure').textContent = formatAllure(act.allureMinParKm) + ' /km';
-    const vapMoyenneDetail = calculerVAPMoyenneActivite(act.points);
-    document.getElementById('detail-vap').textContent = vapMoyenneDetail !== null ? formatAllure(vapMoyenneDetail) + ' /km' : 'N/A';
+    document.getElementById('detail-label-allure').textContent = estVelo ? 'Vitesse :' : 'Allure :';
+    document.getElementById('detail-allure').textContent = estVelo
+      ? formaterVitesseKmh(calculerVitesseKmh(act.allureMinParKm))
+      : formatAllure(act.allureMinParKm) + ' /km';
+    if (!estVelo) {
+      const vapMoyenneDetail = calculerVAPMoyenneActivite(act.points);
+      document.getElementById('detail-vap').textContent = vapMoyenneDetail !== null ? formatAllure(vapMoyenneDetail) + ' /km' : 'N/A';
+    }
     document.getElementById('detail-denivele').textContent = act.deniveleDPlus + ' m';
   }
 
   afficherTableauLaps(act);
+  afficherEditionTapis(act);
   afficherGraphiqueFC(act.points, act.dureeSecondes);
   if (!sansDistance) {
     afficherCarte(act);
     afficherGraphiqueDenivele(act.points);
-    afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps);
+    afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps, estVelo);
   }
 }
 
@@ -2604,7 +2894,7 @@ document.getElementById('selectAllure').addEventListener('change', function(e) {
   if (activiteEnCoursAffichage !== null && activitesEnMemoire.length > activiteEnCoursAffichage) {
     const act = activitesEnMemoire[activiteEnCoursAffichage];
     if (act) {
-      afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps);
+      afficherGraphiqueAllure(act.points, act.dureeSecondes, act.laps, estActiviteVelo(act));
       afficherGraphiqueFC(act.points, act.dureeSecondes);
     }
   }
@@ -2935,8 +3225,13 @@ function afficherRecordsAutomatiques() {
     titre.textContent = libelle;
     bloc.appendChild(titre);
 
+    // Bloc "Vélo" (ou "Vélo (non classé)") : colonne en vitesse (km/h)
+    // plutôt qu'allure (06/10/2026, demande de l'utilisateur) — toutes les
+    // activités d'un même bloc partagent le même libellé, donc le même sport.
+    const blocEstVelo = libelle.startsWith('Vélo');
+
     const tableau = document.createElement('table');
-    tableau.innerHTML = '<thead><tr><th>Distance</th><th>Meilleur temps</th><th>Allure</th><th>Date</th></tr></thead>';
+    tableau.innerHTML = `<thead><tr><th>Distance</th><th>Meilleur temps</th><th>${blocEstVelo ? 'Vitesse' : 'Allure'}</th><th>Date</th></tr></thead>`;
     const corps = document.createElement('tbody');
 
     DISTANCES_RECORDS.forEach(distanceInfo => {
@@ -2944,13 +3239,16 @@ function afficherRecordsAutomatiques() {
       if (!record) return;
 
       const allureMinParKm = (record.dureeSecondes / 60) / (distanceInfo.metres / 1000);
+      const celluleAllure = blocEstVelo
+        ? formaterVitesseKmh(calculerVitesseKmh(allureMinParKm))
+        : formatAllure(allureMinParKm) + ' /km';
       const ligne = document.createElement('tr');
       ligne.style.cursor = 'pointer';
       ligne.title = "Voir l'activité";
       ligne.innerHTML = `
         <td>${distanceInfo.libelle}</td>
         <td>${formatDureeRecord(record.dureeSecondes)}</td>
-        <td>${formatAllure(allureMinParKm)} /km</td>
+        <td>${celluleAllure}</td>
         <td>${formatDate(record.activite.date)}</td>
       `;
       ligne.addEventListener('click', () => ouvrirActiviteParId(record.activite.id));
