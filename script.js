@@ -4257,6 +4257,20 @@ const DUREE_TAPER_JOURS = 7;             // 1 semaine de taper, dans tous les ca
 const DUREE_RECUP_COURTE_JOURS = 7;      // 1 semaine de récupération par défaut
 const DUREE_RECUP_LONGUE_JOURS = 14;     // 2 semaines si l'objectif est un ultra (>= 50 km) ou une course à étapes
 
+// Cycles progressifs à l'intérieur d'un bloc "base"/"entretien" (ajouté le
+// 06/10/2026, à la demande de l'utilisateur) : un schéma 3:1 (3 semaines de
+// charge progressive + 1 semaine d'assimilation/déload), le ratio le plus
+// communément recommandé en périodisation d'endurance (Daniels, Pfitzinger,
+// Friel) pour un athlète avec une bonne base et sans antécédent de blessure
+// particulier — ce qui correspond au profil de l'utilisateur (voir le
+// document de référence, section 2.1). Un schéma 4:1 (5 semaines) existe
+// aussi dans la littérature pour des athlètes très rodés qui récupèrent
+// vite, mais au prix d'un risque de fatigue accumulée plus élevé sans cette
+// semaine de récupération supplémentaire — 3:1 reste le défaut le plus sûr
+// tant qu'on n'a pas de retour sur comment l'utilisateur encaisse les cycles.
+const DUREE_CYCLE_PROGRESSIF_JOURS = 28; // 4 semaines par cycle
+const DUREE_PROGRESSIF_JOURS = 21;       // dont 3 semaines progressives (le reste du cycle = assimilation)
+
 // Parse une date de formulaire ("YYYY-MM-DD", sans heure ni fuseau) en objet
 // Date à minuit HEURE LOCALE. Important : `new Date('YYYY-MM-DD')` tout
 // court est interprété comme minuit UTC par le navigateur, ce qui peut
@@ -4278,6 +4292,34 @@ function formaterDateObjet(date) {
   const mois = (date.getMonth() + 1).toString().padStart(2, '0');
   const annee = date.getFullYear();
   return `${jour}/${mois}/${annee}`;
+}
+
+// Découpe une période [debut, fin) en cycles progressifs répétés de 4
+// semaines (3 semaines "progressif" + 1 semaine "assimilation"). Le dernier
+// cycle, s'il est plus court que 4 semaines, est raccourci proportionnellement
+// plutôt que de dépasser `fin` : s'il reste plus de 3 semaines de reliquat, on
+// garde quand même une semaine d'assimilation à la fin ; sinon (reliquat de 3
+// semaines ou moins), tout le reliquat reste "progressif" — pas assez de
+// temps pour une vraie semaine de déload isolée, et mieux vaut enchaîner
+// directement sur le bloc suivant que d'avoir une semaine d'assimilation de
+// quelques jours seulement.
+function decouperCyclesProgressifs(debut, fin) {
+  const sousBlocs = [];
+  let curseur = debut;
+  while (curseur < fin) {
+    const finCycleIdeal = ajouterJours(curseur, DUREE_CYCLE_PROGRESSIF_JOURS);
+    const finCycle = finCycleIdeal < fin ? finCycleIdeal : fin;
+    const dureeCycle = (finCycle - curseur) / JOUR_MS;
+    if (dureeCycle > DUREE_PROGRESSIF_JOURS) {
+      const finProgressif = ajouterJours(curseur, DUREE_PROGRESSIF_JOURS);
+      sousBlocs.push({ type: 'progressif', debut: curseur, fin: finProgressif });
+      sousBlocs.push({ type: 'assimilation', debut: finProgressif, fin: finCycle });
+    } else {
+      sousBlocs.push({ type: 'progressif', debut: curseur, fin: finCycle });
+    }
+    curseur = finCycle;
+  }
+  return sousBlocs;
 }
 
 // Un objectif est traité comme "long/étapes" (récupération de 2 semaines
@@ -4327,7 +4369,7 @@ function calculerFrise(objectifs, aujourdHui) {
       const specifiqueDebutIdeal = ajouterJours(taperDebutIdeal, -DUREE_SPECIFIQUE_JOURS);
       const specifiqueDebut = specifiqueDebutIdeal > finBlocPrecedent ? specifiqueDebutIdeal : finBlocPrecedent;
       if (specifiqueDebut > finBlocPrecedent) {
-        blocs.push({ type: 'base', debut: finBlocPrecedent, fin: specifiqueDebut });
+        blocs.push({ type: 'base', debut: finBlocPrecedent, fin: specifiqueDebut, sousBlocs: decouperCyclesProgressifs(finBlocPrecedent, specifiqueDebut) });
       }
       if (taperDebutIdeal > specifiqueDebut) {
         blocs.push({ type: 'specifique', debut: specifiqueDebut, fin: taperDebutIdeal });
@@ -4336,7 +4378,7 @@ function calculerFrise(objectifs, aujourdHui) {
       const transitionDebutIdeal = ajouterJours(taperDebutIdeal, -DUREE_TRANSITION_COURTE_JOURS);
       const transitionDebut = transitionDebutIdeal > finBlocPrecedent ? transitionDebutIdeal : finBlocPrecedent;
       if (transitionDebut > finBlocPrecedent) {
-        blocs.push({ type: 'entretien', debut: finBlocPrecedent, fin: transitionDebut });
+        blocs.push({ type: 'entretien', debut: finBlocPrecedent, fin: transitionDebut, sousBlocs: decouperCyclesProgressifs(finBlocPrecedent, transitionDebut) });
       }
       if (taperDebutIdeal > transitionDebut) {
         blocs.push({ type: 'transition_courte', debut: transitionDebut, fin: taperDebutIdeal });
@@ -4347,11 +4389,18 @@ function calculerFrise(objectifs, aujourdHui) {
     if (dateObj > taperDebut) {
       blocs.push({ type: 'taper', debut: taperDebut, fin: dateObj });
     }
-    blocs.push({ type: 'course', debut: dateObj, fin: dateObj });
+
+    // `dateFin` (optionnel) permet de représenter une course qui dure
+    // plusieurs jours (ex. le Trans Percé, 18-20 juin) : le bloc "course"
+    // couvre alors toute la période, et la récupération démarre à la fin de
+    // la course plutôt qu'à son premier jour. Sans `dateFin`, se comporte
+    // exactement comme avant (course et récupération démarrent le même jour).
+    const dateFinObj = objectif.dateFin ? parserDateObjectif(objectif.dateFin) : dateObj;
+    blocs.push({ type: 'course', debut: dateObj, fin: dateFinObj });
 
     const dureeRecupJours = recuperationLongue(objectif) ? DUREE_RECUP_LONGUE_JOURS : DUREE_RECUP_COURTE_JOURS;
-    const finRecup = ajouterJours(dateObj, dureeRecupJours);
-    blocs.push({ type: 'recup', debut: dateObj, fin: finRecup });
+    const finRecup = ajouterJours(dateFinObj, dureeRecupJours);
+    blocs.push({ type: 'recup', debut: dateFinObj, fin: finRecup });
 
     resultats.push({ objectif, prioriteEffective, blocs });
 
@@ -4372,10 +4421,38 @@ const LIBELLES_BLOC_FRISE = {
   recup: 'Récupération'
 };
 
+const LIBELLES_SOUS_BLOC_FRISE = {
+  progressif: 'Semaines progressives',
+  assimilation: 'Semaine d\'assimilation'
+};
+
+// Formate l'intitulé d'un bloc : une seule date s'il dure 0 jour (ex. une
+// course d'un seul jour, sans `dateFin`), une plage sinon — ce qui couvre
+// aussi bien une course d'un jour qu'une course à étapes (section "course",
+// voir `dateFin` dans calculerFrise) sans cas particulier.
+function libelleBloc(nomBloc, b) {
+  if (b.fin > b.debut) {
+    return `${nomBloc} : du ${formaterDateObjet(b.debut)} au ${formaterDateObjet(b.fin)}`;
+  }
+  return `${nomBloc} : ${formaterDateObjet(b.debut)}`;
+}
+
+// Formate la date (ou la plage de dates) d'affichage d'un objectif, pour le
+// titre de sa frise et pour le tableau des objectifs.
+function formaterPlageDateObjectif(objectif) {
+  const debut = formaterDateObjet(parserDateObjectif(objectif.date));
+  if (!objectif.dateFin || objectif.dateFin === objectif.date) return debut;
+  const fin = formaterDateObjet(parserDateObjectif(objectif.dateFin));
+  return `${debut} → ${fin}`;
+}
+
 // Reconstruit la frise de périodisation (section "Plan") : une barre
 // visuelle proportionnelle à la durée de chaque bloc (juste pour l'aperçu
 // d'ensemble), suivie du détail textuel exact des dates de chaque bloc (la
-// barre seule ne permettrait pas de vérifier une date précise).
+// barre seule ne permettrait pas de vérifier une date précise). Un bloc
+// "base"/"entretien" porte en plus ses cycles progressifs (`sousBlocs`,
+// voir `decouperCyclesProgressifs`) : affichés comme des segments plus fins
+// dans la barre, et comme une sous-liste numérotée par cycle dans le détail.
 function afficherFrise() {
   const zone = document.getElementById('zone-frise');
   if (!zone) return;
@@ -4397,7 +4474,7 @@ function afficherFrise() {
     conteneur.className = 'frise-objectif';
 
     const titre = document.createElement('h3');
-    titre.textContent = `${objectif.nom} — ${formaterDateObjet(parserDateObjectif(objectif.date))}` +
+    titre.textContent = `${objectif.nom} — ${formaterPlageDateObjectif(objectif)}` +
       (prioriteEffective !== objectif.priorite
         ? ' (préparation raccourcie : trop proche d\'un autre objectif principal)'
         : '');
@@ -4408,12 +4485,24 @@ function afficherFrise() {
     blocs.forEach(b => {
       const dureeJours = (b.fin - b.debut) / JOUR_MS;
       if (dureeJours <= 0 && b.type !== 'course') return; // bloc complètement absorbé (pas assez de temps), rien à afficher
+
+      if (b.sousBlocs && b.sousBlocs.length > 0) {
+        b.sousBlocs.forEach(sb => {
+          const dureeSousBloc = (sb.fin - sb.debut) / JOUR_MS;
+          if (dureeSousBloc <= 0) return;
+          const segmentSousBloc = document.createElement('div');
+          segmentSousBloc.className = 'frise-segment frise-' + sb.type;
+          segmentSousBloc.style.flexGrow = String(Math.max(dureeSousBloc, 1));
+          segmentSousBloc.title = `${LIBELLES_BLOC_FRISE[b.type]} — ${libelleBloc(LIBELLES_SOUS_BLOC_FRISE[sb.type], sb)}`;
+          barre.appendChild(segmentSousBloc);
+        });
+        return;
+      }
+
       const segment = document.createElement('div');
       segment.className = 'frise-segment frise-' + b.type;
       segment.style.flexGrow = String(Math.max(dureeJours, 1));
-      segment.title = b.type === 'course'
-        ? `${LIBELLES_BLOC_FRISE[b.type]} : ${formaterDateObjet(b.debut)}`
-        : `${LIBELLES_BLOC_FRISE[b.type]} : du ${formaterDateObjet(b.debut)} au ${formaterDateObjet(b.fin)}`;
+      segment.title = libelleBloc(LIBELLES_BLOC_FRISE[b.type], b);
       barre.appendChild(segment);
     });
     conteneur.appendChild(barre);
@@ -4424,9 +4513,23 @@ function afficherFrise() {
       const dureeJours = (b.fin - b.debut) / JOUR_MS;
       if (dureeJours <= 0 && b.type !== 'course') return;
       const li = document.createElement('li');
-      li.textContent = b.type === 'course'
-        ? `${LIBELLES_BLOC_FRISE[b.type]} : ${formaterDateObjet(b.debut)}`
-        : `${LIBELLES_BLOC_FRISE[b.type]} : du ${formaterDateObjet(b.debut)} au ${formaterDateObjet(b.fin)}`;
+      li.textContent = libelleBloc(LIBELLES_BLOC_FRISE[b.type], b);
+
+      if (b.sousBlocs && b.sousBlocs.length > 0) {
+        const sousListe = document.createElement('ul');
+        sousListe.className = 'frise-sous-liste';
+        let numeroCycle = 0;
+        b.sousBlocs.forEach(sb => {
+          const dureeSousBloc = (sb.fin - sb.debut) / JOUR_MS;
+          if (dureeSousBloc <= 0) return;
+          if (sb.type === 'progressif') numeroCycle++;
+          const liSousBloc = document.createElement('li');
+          liSousBloc.textContent = `Cycle ${numeroCycle} — ${libelleBloc(LIBELLES_SOUS_BLOC_FRISE[sb.type], sb)}`;
+          sousListe.appendChild(liSousBloc);
+        });
+        li.appendChild(sousListe);
+      }
+
       liste.appendChild(li);
     });
     conteneur.appendChild(liste);
@@ -4447,6 +4550,7 @@ function objectifsInitiaux() {
       id: 'objectif-trans-perce-2027',
       nom: 'Trans Percé 75 km',
       date: '2027-06-18',
+      dateFin: '2027-06-20',
       distanceKm: 75,
       deniveleM: 2800,
       priorite: 'principale',
@@ -4528,7 +4632,7 @@ function afficherObjectifs() {
     const ligne = document.createElement('tr');
     ligne.innerHTML = `
       <td>${objectif.nom}</td>
-      <td>${objectif.date ? formaterDateObjet(parserDateObjectif(objectif.date)) : '--'}</td>
+      <td>${objectif.date ? formaterPlageDateObjectif(objectif) : '--'}</td>
       <td>${Number.isFinite(objectif.distanceKm) ? objectif.distanceKm + ' km' : '--'}</td>
       <td>${Number.isFinite(objectif.deniveleM) ? objectif.deniveleM + ' m' : '--'}</td>
       <td>${LIBELLES_PRIORITE[objectif.priorite] || objectif.priorite}</td>
@@ -4550,6 +4654,7 @@ function afficherObjectifs() {
 function viderFormulaireObjectif() {
   document.getElementById('objectif-nom').value = '';
   document.getElementById('objectif-date').value = '';
+  document.getElementById('objectif-date-fin').value = '';
   document.getElementById('objectif-distance').value = '';
   document.getElementById('objectif-denivele').value = '';
   document.getElementById('objectif-priorite').value = 'principale';
@@ -4564,6 +4669,7 @@ function chargerObjectifDansFormulaire(objectif) {
   objectifEnCoursEdition = objectif.id;
   document.getElementById('objectif-nom').value = objectif.nom || '';
   document.getElementById('objectif-date').value = objectif.date || '';
+  document.getElementById('objectif-date-fin').value = objectif.dateFin || '';
   document.getElementById('objectif-distance').value = Number.isFinite(objectif.distanceKm) ? objectif.distanceKm : '';
   document.getElementById('objectif-denivele').value = Number.isFinite(objectif.deniveleM) ? objectif.deniveleM : '';
   document.getElementById('objectif-priorite').value = objectif.priorite === 'secondaire' ? 'secondaire' : 'principale';
@@ -4572,6 +4678,12 @@ function chargerObjectifDansFormulaire(objectif) {
 
   document.getElementById('btn-ajouter-objectif').textContent = 'Mettre à jour l\'objectif';
   document.getElementById('btn-annuler-edition-objectif').style.display = 'inline-block';
+  // Le formulaire est masqué par défaut (voir <details id="objectif-nouveau">
+  // dans index.html, ajouté le 06/10/2026 car peu utilisé au quotidien) :
+  // on l'ouvre explicitement pour que l'utilisateur voie le formulaire
+  // pré-rempli plutôt que de devoir cliquer sur "➕ Ajouter un objectif" lui-même.
+  const details = document.getElementById('objectif-nouveau');
+  if (details) details.open = true;
 }
 
 function annulerEditionObjectif() {
@@ -4579,6 +4691,11 @@ function annulerEditionObjectif() {
   viderFormulaireObjectif();
   document.getElementById('btn-ajouter-objectif').textContent = 'Ajouter l\'objectif';
   document.getElementById('btn-annuler-edition-objectif').style.display = 'none';
+  // On referme le formulaire (sauf s'il vient d'être ouvert par l'utilisateur
+  // lui-même puis annulé tout de suite — le refermer quand même reste le
+  // comportement le plus prévisible : "Annuler" = retour à l'état de départ).
+  const details = document.getElementById('objectif-nouveau');
+  if (details) details.open = false;
 }
 
 function supprimerObjectif(id) {
@@ -4591,6 +4708,7 @@ function supprimerObjectif(id) {
 document.getElementById('btn-ajouter-objectif').addEventListener('click', function () {
   const nom = document.getElementById('objectif-nom').value.trim();
   const date = document.getElementById('objectif-date').value;
+  const dateFinSaisie = document.getElementById('objectif-date-fin').value || null;
   const distanceSaisie = parseFloat(document.getElementById('objectif-distance').value);
   const deniveleSaisi = parseInt(document.getElementById('objectif-denivele').value);
   const priorite = document.getElementById('objectif-priorite').value;
@@ -4603,10 +4721,16 @@ document.getElementById('btn-ajouter-objectif').addEventListener('click', functi
     message.style.display = 'block';
     return;
   }
+  if (dateFinSaisie && dateFinSaisie < date) {
+    message.textContent = '❌ La date de fin ne peut pas être avant la date de début.';
+    message.style.display = 'block';
+    return;
+  }
 
   const id = objectifEnCoursEdition || ('objectif-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
   const objectif = {
     id, nom, date,
+    dateFin: dateFinSaisie,
     distanceKm: Number.isFinite(distanceSaisie) ? distanceSaisie : null,
     deniveleM: Number.isFinite(deniveleSaisi) ? deniveleSaisi : null,
     priorite, statut, format
