@@ -579,6 +579,78 @@ h1 {
   opacity: 0.7;
 }
 
+/* --- Objectifs et frise de périodisation (page Plan, ajoutée le 06/10/2026) --- */
+#plan-objectifs,
+#plan-frise {
+  background: white;
+  border-radius: 8px;
+  padding: 15px 20px 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  margin-top: 25px;
+}
+#plan-objectifs h2,
+#plan-frise h2 {
+  margin-top: 0;
+  font-size: 1.1em;
+}
+
+.bouton-annuler {
+  background-color: #7f8c8d;
+  margin-left: 8px;
+}
+.bouton-annuler:hover {
+  background-color: #636e72;
+}
+
+.bouton-modifier-objectif,
+.bouton-supprimer-objectif {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1em;
+}
+.bouton-modifier-objectif:hover,
+.bouton-supprimer-objectif:hover {
+  opacity: 0.7;
+}
+
+/* Un bloc par objectif : titre, barre proportionnelle aux durées des blocs
+   de périodisation, puis le détail textuel exact des dates (la barre seule
+   ne permet pas de lire une date précise, juste une vue d'ensemble). */
+.frise-objectif {
+  margin-top: 20px;
+}
+.frise-objectif:first-child {
+  margin-top: 0;
+}
+.frise-objectif h3 {
+  font-size: 0.95em;
+  margin-bottom: 8px;
+  color: #2c3e50;
+}
+.frise-barre {
+  display: flex;
+  height: 26px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.frise-segment {
+  min-width: 4px;
+}
+.frise-base, .frise-entretien { background-color: #a8c5da; }
+.frise-specifique, .frise-transition_courte { background-color: #4f8fc0; }
+.frise-taper { background-color: #e8a33d; }
+.frise-course { background-color: #c0392b; flex-grow: 0.6 !important; }
+.frise-recup { background-color: #8fbf8f; }
+
+.frise-liste {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.85em;
+  color: #555;
+}
+
 /* --- Segments (page Records) --- */
 #segments {
   background: white;
