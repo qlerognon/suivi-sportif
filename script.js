@@ -4307,6 +4307,54 @@ function formaterDateObjet(date) {
   return `${jour}/${mois}/${annee}`;
 }
 
+// Vrai si le jour `jour` (un objet Date à minuit) tombe dans la période
+// [periode.dateDebut, periode.dateFin] — bornes inclusives des DEUX côtés,
+// contrairement à `periodeChevauche` (qui compare un jour à un intervalle
+// demi-ouvert [debut, fin) de bloc/sous-bloc, et exclurait donc à tort le
+// dernier jour calendaire de la période elle-même). Utilisé uniquement par
+// `dureeDecalante`/`decalerPourPeriodesMortes` ci-dessous, qui raisonnent
+// jour par jour plutôt que par intervalle de bloc.
+function periodeCouvreJour(periode, jour) {
+  if (!periode.dateDebut || !periode.dateFin) return false;
+  const pDebut = parserDateObjectif(periode.dateDebut);
+  const pFin = parserDateObjectif(periode.dateFin);
+  return jour >= pDebut && jour <= pFin;
+}
+
+// Nombre de jours (entier) de recoupement entre les périodes "décalantes"
+// (pause forcée / disponibilité réduite — jamais "weekend choc", qui reste
+// purement informatif, voir `construirePeriodesDecalantes`) et l'intervalle
+// [debut, fin). Compte chaque jour une seule fois même si deux périodes se
+// chevauchent entre elles.
+function dureeDecalante(debut, fin, periodesDecalantes) {
+  let total = 0;
+  let curseur = debut;
+  while (curseur < fin) {
+    if (periodesDecalantes.some(p => periodeCouvreJour(p, curseur))) total++;
+    curseur = ajouterJours(curseur, 1);
+  }
+  return total;
+}
+
+// Avance depuis `debut` jusqu'à avoir accumulé `dureeJoursVoulue` jours
+// "actifs" (hors périodes décalantes) — les jours couverts par une période
+// décalante sont sautés sans compter dans le quota, ce qui a pour effet de
+// repousser la date de fin d'autant de jours. Ne dépasse jamais `limiteFin`
+// quand il est fourni (une borne fixe comme une date de course, qui ne peut
+// pas bouger) : si le quota n'est pas atteint avant, la fin est simplement
+// tronquée à `limiteFin`.
+function decalerPourPeriodesMortes(debut, dureeJoursVoulue, periodesDecalantes, limiteFin) {
+  let curseur = debut;
+  let joursActifsRestants = dureeJoursVoulue;
+  while (joursActifsRestants > 0) {
+    if (limiteFin && curseur >= limiteFin) return limiteFin;
+    const estMort = periodesDecalantes.some(p => periodeCouvreJour(p, curseur));
+    curseur = ajouterJours(curseur, 1);
+    if (!estMort) joursActifsRestants--;
+  }
+  return (limiteFin && curseur > limiteFin) ? limiteFin : curseur;
+}
+
 // Découpe une période [debut, fin) en cycles progressifs répétés de 4
 // semaines (3 semaines "progressif" + 1 semaine "assimilation"). Le dernier
 // cycle, s'il est plus court que 4 semaines, est raccourci proportionnellement
@@ -4316,15 +4364,23 @@ function formaterDateObjet(date) {
 // temps pour une vraie semaine de déload isolée, et mieux vaut enchaîner
 // directement sur le bloc suivant que d'avoir une semaine d'assimilation de
 // quelques jours seulement.
-function decouperCyclesProgressifs(debut, fin) {
+//
+// `periodesDecalantes` (ajouté le 06/10/2026) : les périodes "pause forcée"
+// ou "disponibilité réduite" qui recoupent ce bloc décalent les frontières de
+// cycle d'autant de jours (voir `decalerPourPeriodesMortes`) au lieu de se
+// contenter du ⚠️ d'alerte — un cycle entamé juste avant une pause reprend
+// après la pause plutôt que de continuer à progresser dans le vide. La
+// troncature en fin de bloc (ci-dessus) continue de s'appliquer : ces blocs
+// sont eux-mêmes ancrés à une date de course fixe (voir `calculerFrise`),
+// donc le temps perdu n'est jamais récupéré au-delà de `fin`.
+function decouperCyclesProgressifs(debut, fin, periodesDecalantes = []) {
   const sousBlocs = [];
   let curseur = debut;
   while (curseur < fin) {
-    const finCycleIdeal = ajouterJours(curseur, DUREE_CYCLE_PROGRESSIF_JOURS);
-    const finCycle = finCycleIdeal < fin ? finCycleIdeal : fin;
-    const dureeCycle = (finCycle - curseur) / JOUR_MS;
+    const finCycle = decalerPourPeriodesMortes(curseur, DUREE_CYCLE_PROGRESSIF_JOURS, periodesDecalantes, fin);
+    const dureeCycle = (finCycle - curseur) / JOUR_MS - dureeDecalante(curseur, finCycle, periodesDecalantes);
     if (dureeCycle > DUREE_PROGRESSIF_JOURS) {
-      const finProgressif = ajouterJours(curseur, DUREE_PROGRESSIF_JOURS);
+      const finProgressif = decalerPourPeriodesMortes(curseur, DUREE_PROGRESSIF_JOURS, periodesDecalantes, finCycle);
       sousBlocs.push({ type: 'progressif', debut: curseur, fin: finProgressif });
       sousBlocs.push({ type: 'assimilation', debut: finProgressif, fin: finCycle });
     } else {
@@ -4353,7 +4409,16 @@ function recuperationLongue(objectif) {
 // premier objectif de la liste) — jamais avant, même si ça raccourcit le
 // bloc spécifique ou de transition par rapport à sa durée "idéale" (mieux
 // vaut une préparation plus courte que des dates qui se chevauchent).
-function calculerFrise(objectifs, aujourdHui) {
+//
+// `periodes` (ajouté le 06/10/2026, optionnel) : les périodes spécifiques de
+// l'utilisateur (pause forcée / disponibilité réduite / weekend choc). Seules
+// les deux premières décalent la structure des cycles progressifs des blocs
+// "base"/"entretien" (voir `construirePeriodesDecalantes` et
+// `decouperCyclesProgressifs`) — les blocs ancrés à une date de course fixe
+// (bloc spécifique, taper, course, récup) ne bougent jamais, et un "weekend
+// choc" reste purement informatif.
+function calculerFrise(objectifs, aujourdHui, periodes = []) {
+  const periodesDecalantes = construirePeriodesDecalantes(periodes);
   const tries = objectifs
     .filter(o => o.date)
     .map(o => ({ objectif: o, dateObj: parserDateObjectif(o.date) }))
@@ -4382,7 +4447,7 @@ function calculerFrise(objectifs, aujourdHui) {
       const specifiqueDebutIdeal = ajouterJours(taperDebutIdeal, -DUREE_SPECIFIQUE_JOURS);
       const specifiqueDebut = specifiqueDebutIdeal > finBlocPrecedent ? specifiqueDebutIdeal : finBlocPrecedent;
       if (specifiqueDebut > finBlocPrecedent) {
-        blocs.push({ type: 'base', debut: finBlocPrecedent, fin: specifiqueDebut, sousBlocs: decouperCyclesProgressifs(finBlocPrecedent, specifiqueDebut) });
+        blocs.push({ type: 'base', debut: finBlocPrecedent, fin: specifiqueDebut, sousBlocs: decouperCyclesProgressifs(finBlocPrecedent, specifiqueDebut, periodesDecalantes) });
       }
       if (taperDebutIdeal > specifiqueDebut) {
         blocs.push({ type: 'specifique', debut: specifiqueDebut, fin: taperDebutIdeal });
@@ -4391,10 +4456,15 @@ function calculerFrise(objectifs, aujourdHui) {
       const transitionDebutIdeal = ajouterJours(taperDebutIdeal, -DUREE_TRANSITION_COURTE_JOURS);
       const transitionDebut = transitionDebutIdeal > finBlocPrecedent ? transitionDebutIdeal : finBlocPrecedent;
       if (transitionDebut > finBlocPrecedent) {
-        blocs.push({ type: 'entretien', debut: finBlocPrecedent, fin: transitionDebut, sousBlocs: decouperCyclesProgressifs(finBlocPrecedent, transitionDebut) });
+        blocs.push({ type: 'entretien', debut: finBlocPrecedent, fin: transitionDebut, sousBlocs: decouperCyclesProgressifs(finBlocPrecedent, transitionDebut, periodesDecalantes) });
       }
       if (taperDebutIdeal > transitionDebut) {
-        blocs.push({ type: 'transition_courte', debut: transitionDebut, fin: taperDebutIdeal });
+        // Même type ("specifique") que pour un objectif "principale" : ne
+        // plus distinguer "Transition courte" visuellement (demande du
+        // 06/10/2026, pour ne pas complexifier la lecture de la frise) —
+        // seule la durée (DUREE_TRANSITION_COURTE_JOURS, plus courte que
+        // DUREE_SPECIFIQUE_JOURS) distingue encore les deux cas en pratique.
+        blocs.push({ type: 'specifique', debut: transitionDebut, fin: taperDebutIdeal });
       }
     }
 
@@ -4428,7 +4498,6 @@ const LIBELLES_BLOC_FRISE = {
   base: 'Base / entretien',
   entretien: 'Entretien',
   specifique: 'Bloc spécifique',
-  transition_courte: 'Transition courte',
   taper: 'Taper',
   course: 'COURSE',
   recup: 'Récupération'
@@ -4491,7 +4560,7 @@ function afficherFrise() {
   const aujourdHui = new Date();
   aujourdHui.setHours(0, 0, 0, 0);
 
-  const frises = calculerFrise(objectifsEnMemoire, aujourdHui);
+  const frises = calculerFrise(objectifsEnMemoire, aujourdHui, periodesEnMemoire);
 
   frises.forEach(({ objectif, prioriteEffective, blocs }) => {
     const conteneur = document.createElement('div');
@@ -4813,17 +4882,33 @@ document.getElementById('btn-annuler-edition-objectif').addEventListener('click'
 // lever le pied, ou un "weekend choc" déjà prévu. Stockées dans Firestore
 // (users/{uid}/periodes/{id} : type, dateDebut, dateFin, notes).
 //
-// Ce que cette première version fait : les signaler (⚠️) sur les blocs (et
-// sous-blocs progressifs) de la frise qu'elles recoupent, dans la barre
-// visuelle ET dans le détail textuel — voir l'intégration dans
-// `afficherFrise` ci-dessus. Ce qu'elle ne fait PAS encore : réorganiser
-// automatiquement les blocs autour d'elles (ex. raccourcir ou décaler un
-// bloc spécifique pour absorber une pause forcée) — pour l'instant c'est à
-// l'utilisateur d'interpréter le signal, la réorganisation automatique
-// pourra venir plus tard si le besoin se confirme.
+// Ce que ça fait : les signaler (⚠️) sur les blocs (et sous-blocs
+// progressifs) de la frise qu'elles recoupent, dans la barre visuelle ET
+// dans le détail textuel (voir l'intégration dans `afficherFrise`
+// ci-dessus) — ET, pour "pause forcée"/"disponibilité réduite" uniquement,
+// décaler automatiquement la suite des cycles progressifs à l'intérieur des
+// blocs "base"/"entretien" (voir `construirePeriodesDecalantes` et
+// `decouperCyclesProgressifs`, ajouté le 06/10/2026 suite à la demande de
+// pouvoir ajuster la planification à son emploi du temps). Le "weekend
+// choc" reste purement informatif (il ne décale jamais rien, voir
+// `construirePeriodesDecalantes`) puisqu'il représente une sortie prévue,
+// pas une interruption.
+//
+// Ce que ça ne fait toujours pas : bouger les blocs ancrés à une date de
+// course fixe (bloc spécifique, taper, course, récupération) — une pause
+// qui recoupe un bloc spécifique reste seulement signalée par le ⚠️, car la
+// seule façon de "l'absorber" serait de reculer la date de course elle-même,
+// ce que l'utilisateur ne souhaite pas.
 // ============================================================
 
 let periodesEnMemoire = [];
+
+// Les types de période qui décalent effectivement la structure des cycles
+// progressifs (voir `decouperCyclesProgressifs`) — "weekend choc" en est
+// délibérément exclu : c'est une sortie prévue, pas une interruption.
+function construirePeriodesDecalantes(periodes) {
+  return periodes.filter(p => p.type === 'pause' || p.type === 'reduite');
+}
 
 const LIBELLES_TYPE_PERIODE = {
   pause: 'Pause forcée',
@@ -5019,117 +5104,84 @@ function afficherIndicateurSaison() {
 
 // ============================================================
 // SEMAINES-TYPES DE RÉFÉRENCE + ÉQUIVALENCE DE CHARGE CROISÉE TRIMP
-// (ajoutées le 06/10/2026 — 2e morceau de cette étape de la phase 2, après
-// les objectifs/frise et les périodes spécifiques)
+// (ajoutées le 06/10/2026, puis largement simplifiées le même jour après
+// retour de l'utilisateur sur la première version : trop de texte, et un
+// calendrier jour par jour trop rigide par rapport à la façon dont il veut
+// réellement s'organiser.)
 //
-// Scope validé avec l'utilisateur (questions de clarification) : un MODÈLE
-// DE RÉFÉRENCE par type de bloc de la frise (pas un calendrier jour par
-// jour généré sur 15 mois — le document de phase 1 déconseille justement
-// cette rigidité, section 6 : "illustration de la logique, pas un
-// calendrier figé"), avec pour chaque séance-type une fourchette de charge
-// CIBLE en TRIMP affichée à titre de repère (section 5 du document) — pas
-// encore de validation automatique contre une activité réellement
-// enregistrée (ça demanderait de pouvoir rattacher une activité à une
-// séance prévue, pas fait dans cette étape), ni de sport par défaut qui
-// changerait tout seul selon la saison (indicateur ci-dessus, volontairement
-// indépendant) : à l'utilisateur de combiner les deux à la lecture.
+// Scope retenu : SEULEMENT 3 semaines-types (Base / entretien, Assimilation,
+// Bloc spécifique) — Taper/Récupération/Course n'ont plus de repère ici,
+// leur détail reste dans la frise elle-même. Chaque semaine-type est une
+// LISTE D'ACTIVITÉS À PLANIFIER dans la semaine (sans jour assigné,
+// `quantite` par type) plutôt qu'un calendrier jour par jour : c'est à
+// l'utilisateur de répartir ça sur ses jours selon son emploi du temps.
+// Pensé aussi pour plus tard : ces mêmes types d'entraînement (les clés de
+// TYPES_SEANCE) pourront servir à catégoriser une activité RÉELLEMENT
+// enregistrée, pour des bilans par type d'entraînement — pas construit
+// dans cette étape (mise de côté explicitement par l'utilisateur pour "un
+// second temps"), mais la structure ci-dessous s'y prête.
 //
 // La fourchette de TRIMP cible n'est PAS une valeur fixe codée en dur :
-// comme le reste de la charge d'entraînement dans cet outil, elle est
 // recalculée à la volée à partir des RÉGLAGES FC et des ZONES de
-// l'utilisateur (en réutilisant calculerCharge(), exactement comme pour une
-// vraie activité) — donc personnalisée, et toujours à jour si ces réglages
-// changent (voir les appels ajoutés dans demarrerEcouteReglages/
-// demarrerEcouteVO2max plus haut).
+// l'utilisateur (`calculerTrimpCible`, en réutilisant calculerCharge()
+// exactement comme pour une vraie activité) — donc personnalisée, et à
+// jour automatiquement si ces réglages changent (voir les appels dans
+// demarrerEcouteReglages/demarrerEcouteVO2max plus haut).
 // ============================================================
 
 const TYPES_SEANCE = {
-  repos:            { libelle: 'Repos',                       sportDefaut: null,                          zone: null, dureeMin: 0,   dureeMax: 0,   substituts: [] },
-  renforcement:     { libelle: 'Renforcement (musculation)',  sportDefaut: 'Musculation',                  zone: null, dureeMin: 45,  dureeMax: 60,  substituts: [] },
-  recup_active:     { libelle: 'Récupération active',         sportDefaut: 'Course à pied très facile',    zone: 0,    dureeMin: 20,  dureeMax: 35,  substituts: ['Natation', 'Vélo très facile', 'Marche'] },
-  endurance_facile: { libelle: 'Endurance facile',             sportDefaut: 'Course à pied',                zone: 1,    dureeMin: 30,  dureeMax: 45,  substituts: ['Natation', 'Vélo facile', 'Marche'] },
-  seuil_tempo:      { libelle: 'Seuil / tempo',                sportDefaut: 'Course à pied (route/tapis)',  zone: 2,    dureeMin: 40,  dureeMax: 60,  substituts: ['Ski de fond en continu soutenu', 'Vélo en tempo'] },
-  fractionne_vma:   { libelle: 'Fractionné VMA / côtes',       sportDefaut: 'Course à pied',                zone: 3,    dureeMin: 35,  dureeMax: 50,  substituts: ['Ski de fond en alternance soutenu/récup', 'Côtes à vélo'] },
-  sortie_longue:    { libelle: 'Sortie longue endurance',      sportDefaut: 'Course à pied',                zone: 1,    dureeMin: 75,  dureeMax: 120, substituts: ['Ski de fond (+10-20% de durée)', 'Vélo (+10-20% de durée)'] },
-  trail_modere:     { libelle: 'Trail modéré',                 sportDefaut: 'Trail',                        zone: 1,    dureeMin: 60,  dureeMax: 90,  substituts: ['Vélo (+10-20% de durée)'] },
-  cote_puissance:   { libelle: 'Côtes / puissance',            sportDefaut: 'Course à pied ou trail',       zone: 3,    dureeMin: 35,  dureeMax: 50,  substituts: ['Côtes à vélo'] },
-  intensite_courte: { libelle: 'Touche d\'intensité courte',   sportDefaut: 'Course à pied',                zone: 2,    dureeMin: 20,  dureeMax: 30,  substituts: [] },
-  weekend_choc_j1:  { libelle: 'Weekend choc — vendredi soir (simulation étape nocturne)', sportDefaut: 'Trail/route', zone: 1, dureeMin: 90,  dureeMax: 120, substituts: [] },
-  weekend_choc_j2:  { libelle: 'Weekend choc — samedi (grosse sortie longue)',             sportDefaut: 'Trail',       zone: 1, dureeMin: 210, dureeMax: 300, substituts: [] },
-  weekend_choc_j3:  { libelle: 'Weekend choc — dimanche (jambes fatiguées)',               sportDefaut: 'Trail',       zone: 1, dureeMin: 100, dureeMax: 150, substituts: [] }
+  renforcement:     { libelle: 'Renforcement',                 sportDefaut: 'Musculation',                 zone: null, dureeMin: 45, dureeMax: 60,  substituts: [] },
+  recup_active:     { libelle: 'Récupération active',         sportDefaut: 'Course à pied très facile',   zone: 0,    dureeMin: 20, dureeMax: 35,  substituts: ['Natation', 'Vélo très facile', 'Marche'] },
+  endurance_facile: { libelle: 'Endurance facile',             sportDefaut: 'Course à pied',               zone: 1,    dureeMin: 30, dureeMax: 45,  substituts: ['Natation', 'Vélo facile', 'Marche'] },
+  seuil_tempo:      { libelle: 'Seuil / tempo',                sportDefaut: 'Course à pied (route/tapis)', zone: 2,    dureeMin: 40, dureeMax: 60,  substituts: ['Ski de fond soutenu', 'Vélo en tempo'] },
+  sortie_longue:    { libelle: 'Sortie longue endurance',      sportDefaut: 'Course à pied',               zone: 1,    dureeMin: 75, dureeMax: 120, substituts: ['Ski de fond (+10-20% durée)', 'Vélo (+10-20% durée)'] },
+  trail_modere:     { libelle: 'Trail modéré',                 sportDefaut: 'Trail',                       zone: 1,    dureeMin: 60, dureeMax: 90,  substituts: ['Vélo (+10-20% durée)'] },
+  cote_puissance:   { libelle: 'Côtes / puissance',            sportDefaut: 'Course à pied ou trail',      zone: 3,    dureeMin: 35, dureeMax: 50,  substituts: ['Côtes à vélo'] },
+  intensite_courte: { libelle: 'Touche d\'intensité courte',   sportDefaut: 'Course à pied',               zone: 2,    dureeMin: 20, dureeMax: 30,  substituts: [] }
 };
 
-// Pour chaque type de bloc produit par calculerFrise (voir plus haut), un ou
-// plusieurs "patrons" de semaine. La plupart n'en ont qu'un seul — le bloc
-// "spécifique" en a deux : la semaine normale ET le schéma "weekend choc",
-// qui ne revient que 2 à 3 fois dans tout le bloc (section 3.4 du
-// document), pas chaque semaine. "entretien" réutilise exactement le même
-// patron que "base" (même structure de semaine, juste un nom de bloc
-// différent). "progressif"/"assimilation" (sous-cycles de "base"/
-// "entretien") et "course" n'ont pas d'entrée ici : voir le texte de repli
-// dans afficherSeancesTypes() ci-dessous.
+// Les 3 seules semaines-types retenues (06/10/2026). `activites` est une
+// LISTE, pas un calendrier : `quantite` séances de ce type à placer
+// librement dans la semaine ; `quantiteOptionnelle` pour une séance EN PLUS
+// si l'utilisateur veut pousser davantage (ex. muscu) ; `optionnelle: true`
+// pour une séance qui peut être sautée entièrement selon la forme du
+// moment. `note` : un seul paragraphe court pour un cas particulier (le
+// "weekend choc" du bloc spécifique) plutôt qu'un patron détaillé de plus.
 const SEANCES_TYPES_PAR_BLOC = {
-  base: [{
-    jours: [
-      { label: 'Lundi', type: 'repos' },
-      { label: 'Mardi', type: 'renforcement' },
-      { label: 'Mercredi', type: 'seuil_tempo' },
-      { label: 'Jeudi', type: 'recup_active' },
-      { label: 'Vendredi', type: 'endurance_facile' },
-      { label: 'Samedi', type: 'sortie_longue' },
-      { label: 'Dimanche', type: 'repos' }
+  base: {
+    activites: [
+      { type: 'renforcement', quantite: 2, quantiteOptionnelle: 1 },
+      { type: 'seuil_tempo', quantite: 1 },
+      { type: 'recup_active', quantite: 1 },
+      { type: 'endurance_facile', quantite: 1 },
+      { type: 'sortie_longue', quantite: 1 }
     ]
-  }],
-  specifique: [
-    {
-      nom: 'Semaine normale',
-      jours: [
-        { label: 'Lundi', type: 'repos' },
-        { label: 'Mardi', type: 'renforcement' },
-        { label: 'Mercredi', type: 'cote_puissance' },
-        { label: 'Jeudi', type: 'recup_active' },
-        { label: 'Vendredi', type: 'trail_modere' },
-        { label: 'Samedi', type: 'sortie_longue' },
-        { label: 'Dimanche', type: 'repos' }
-      ]
-    },
-    {
-      nom: 'Weekend choc (2 à 3 fois dans ce bloc, dans les 6-8 dernières semaines avant la course)',
-      jours: [
-        { label: 'Vendredi soir', type: 'weekend_choc_j1' },
-        { label: 'Samedi', type: 'weekend_choc_j2' },
-        { label: 'Dimanche', type: 'weekend_choc_j3' }
-      ]
-    }
-  ],
-  transition_courte: [{
-    jours: [
-      { label: 'Lundi', type: 'repos' },
-      { label: 'Mardi', type: 'renforcement' },
-      { label: 'Mercredi', type: 'cote_puissance' },
-      { label: 'Jeudi', type: 'recup_active' },
-      { label: 'Vendredi', type: 'endurance_facile' },
-      { label: 'Samedi', type: 'sortie_longue' },
-      { label: 'Dimanche', type: 'repos' }
-    ]
-  }],
-  taper: [{
-    nom: 'Ordre indicatif — la semaine du taper se cale sur la date de la course, pas forcément sur lundi-dimanche',
-    jours: [
-      { label: 'J-6 / J-5', type: 'endurance_facile' },
-      { label: 'J-4', type: 'repos' },
-      { label: 'J-3', type: 'intensite_courte' },
-      { label: 'J-2', type: 'repos' },
-      { label: 'J-1', type: 'recup_active' }
-    ]
-  }],
-  recup: [{
-    jours: [
-      { label: 'Premiers jours', type: 'repos' },
-      { label: 'Milieu de la récup', type: 'recup_active' },
-      { label: 'Fin de la récup', type: 'endurance_facile' }
-    ]
-  }]
+  },
+  assimilation: {
+    activites: [
+      { type: 'renforcement', quantite: 1 },
+      { type: 'recup_active', quantite: 1 },
+      { type: 'endurance_facile', quantite: 1 },
+      { type: 'intensite_courte', quantite: 1, optionnelle: true }
+    ],
+    note: 'Semaine de décharge après 3 semaines progressives (schéma 3:1) : volume et intensité nettement réduits, pas de sortie longue cette semaine-là — priorité à la récupération (sommeil, mobilité).'
+  },
+  specifique: {
+    activites: [
+      { type: 'renforcement', quantite: 2 },
+      { type: 'cote_puissance', quantite: 1 },
+      { type: 'recup_active', quantite: 1 },
+      { type: 'trail_modere', quantite: 1 },
+      { type: 'sortie_longue', quantite: 1 }
+    ],
+    note: '+ 2 à 3 fois dans ce bloc (6-8 dernières semaines avant la course), un enchaînement "weekend choc" remplace la semaine normale : vendredi soir ~13 km (simulation étape nocturne), samedi grosse sortie longue 35-45 km, dimanche 12-18 km en jambes fatiguées.'
+  }
+};
+
+const TITRES_SEANCES_TYPES = {
+  base: 'Base / entretien',
+  assimilation: 'Assimilation',
+  specifique: 'Bloc spécifique'
 };
 
 // Calcule une fourchette de TRIMP cible pour une zone FC + une plage de
@@ -5151,12 +5203,9 @@ function calculerTrimpCible(indexZone, dureeMinMinutes, dureeMaxMinutes) {
   return [Math.min(trimpBas, trimpHaut), Math.max(trimpBas, trimpHaut)];
 }
 
-function formaterLigneSeanceType(entree) {
+function formaterLigneActivite(entree) {
   const typeSeance = TYPES_SEANCE[entree.type];
   if (!typeSeance) return '';
-  if (entree.type === 'repos') {
-    return `<li><strong>${entree.label} :</strong> Repos</li>`;
-  }
 
   const duree = typeSeance.dureeMin === typeSeance.dureeMax
     ? `~${typeSeance.dureeMin} min`
@@ -5164,27 +5213,17 @@ function formaterLigneSeanceType(entree) {
   const zoneTexte = typeSeance.zone !== null ? NOMS_ZONES[typeSeance.zone] : null;
   let trimpTexte = '';
   if (typeSeance.zone !== null) {
-    const trimpCible = calculerTrimpCible(typeSeance.zone, typeSeance.dureeMin, typeSeance.dureeMax);
-    trimpTexte = trimpCible
-      ? ` · charge cible ~${trimpCible[0]}-${trimpCible[1]} TRIMP`
-      : ' · charge cible : N/A (configure tes réglages FC et tes zones dans Paramètres)';
+    const cible = calculerTrimpCible(typeSeance.zone, typeSeance.dureeMin, typeSeance.dureeMax);
+    trimpTexte = cible
+      ? ` · ~${cible[0]}-${cible[1]} TRIMP`
+      : ' · charge cible : N/A (réglages FC/zones à configurer)';
   }
-  const substitutsTexte = typeSeance.substituts.length > 0
-    ? ` · substituts à charge équivalente : ${typeSeance.substituts.join(', ')}`
-    : '';
+  const substitutsTexte = typeSeance.substituts.length > 0 ? ` · substituts : ${typeSeance.substituts.join(', ')}` : '';
+  const quantiteTexte = entree.quantite + '×' +
+    (entree.quantiteOptionnelle ? ` (+${entree.quantiteOptionnelle} optionnelle)` : '') +
+    (entree.optionnelle ? ' (optionnelle)' : '');
 
-  return `<li><strong>${entree.label} :</strong> ${typeSeance.libelle} (${typeSeance.sportDefaut}${zoneTexte ? ', ' + zoneTexte : ''}, ${duree})${trimpTexte}${substitutsTexte}</li>`;
-}
-
-function construireBlocSeanceType(nomBloc, patrons) {
-  const titre = LIBELLES_BLOC_FRISE[nomBloc] || nomBloc;
-  let html = `<div class="seance-type-bloc"><h3>${titre}</h3>`;
-  patrons.forEach(patron => {
-    if (patron.nom) html += `<p class="seance-type-nom-patron">${patron.nom}</p>`;
-    html += `<ul class="seance-type-liste">${patron.jours.map(formaterLigneSeanceType).join('')}</ul>`;
-  });
-  html += `</div>`;
-  return html;
+  return `<li>${quantiteTexte} ${typeSeance.libelle} (${typeSeance.sportDefaut}${zoneTexte ? ', ' + zoneTexte : ''}) — ${duree}${trimpTexte}${substitutsTexte}</li>`;
 }
 
 function afficherSeancesTypes() {
@@ -5192,19 +5231,13 @@ function afficherSeancesTypes() {
   if (!zone) return;
 
   let html = '';
-  ['base', 'specifique', 'transition_courte', 'taper', 'recup'].forEach(nomBloc => {
-    html += construireBlocSeanceType(nomBloc, SEANCES_TYPES_PAR_BLOC[nomBloc]);
+  ['base', 'assimilation', 'specifique'].forEach(nomBloc => {
+    const contenu = SEANCES_TYPES_PAR_BLOC[nomBloc];
+    html += `<div class="seance-type-bloc"><h3>${TITRES_SEANCES_TYPES[nomBloc]}</h3>`;
+    html += `<ul class="seance-type-liste">${contenu.activites.map(formaterLigneActivite).join('')}</ul>`;
+    if (contenu.note) html += `<p class="seance-type-note">${contenu.note}</p>`;
+    html += `</div>`;
   });
-  // "Entretien" suit exactement la même structure que "Base" (voir la note
-  // dans SEANCES_TYPES_PAR_BLOC ci-dessus) : même patron, juste un titre
-  // différent — pas dupliqué dans les données, seulement à l'affichage.
-  html += construireBlocSeanceType('entretien', SEANCES_TYPES_PAR_BLOC['base']);
-  // "progressif"/"assimilation" ne sont pas des structures à part : ce sont
-  // les mêmes semaines que "Base / entretien", qui montent en charge
-  // progressivement puis se déchargent (voir decouperCyclesProgressifs plus
-  // haut) — pas de patron dupliqué, juste une note explicative.
-  html += `<div class="seance-type-bloc"><h3>Cycles progressifs / assimilation</h3><p class="description">Pas un patron à part : ce sont les mêmes semaines que "Base / entretien" ci-dessus, avec un volume qui augmente sur 3 semaines (schéma 3:1, voir la frise plus haut) puis une semaine de décharge à volume réduit.</p></div>`;
-  html += `<div class="seance-type-bloc"><h3>Course</h3><p class="description">Pas de semaine-type ici : se référer au format de l'objectif (distance, D+, nombre de jours) dans le tableau "Objectifs" plus haut.</p></div>`;
 
   zone.innerHTML = html;
 }
