@@ -67,6 +67,7 @@
     <button class="nav-onglet actif" data-page="accueil">🏠 Accueil</button>
     <button class="nav-onglet" data-page="activite">📋 Activité</button>
     <button class="nav-onglet" data-page="records">🏆 Records</button>
+    <button class="nav-onglet" data-page="plan">🗺️ Plan</button>
     <button class="nav-onglet" data-page="parametres">⚙️ Paramètres</button>
   </nav>
 
@@ -568,6 +569,72 @@
 
       <div id="zone-segments"></div>
       <p id="segments-message" class="message-neutre" style="display:none;">Définis un premier segment ci-dessus pour voir apparaître tes temps ici.</p>
+    </section>
+
+  </section>
+
+  <!-- ============================================================
+       PAGE PLAN : objectifs (courses visées) et frise de périodisation
+       calculée automatiquement à partir de leurs dates. Première étape
+       (06/10/2026) de l'intégration du plan d'entraînement 2026-2027
+       (voir le document de référence `plan-entrainement-2027.md` dans le
+       projet Claude) : pour l'instant, juste les objectifs + la frise
+       (base/spécifique/taper/course/récup) — pas encore les semaines-types,
+       la règle saisonnière ni la logique d'équivalence charge croisée
+       (TRIMP), qui viendront dans une étape suivante.
+       ============================================================ -->
+  <section id="page-plan" class="page" style="display:none;">
+
+    <section id="plan-objectifs">
+      <h2>🎯 Objectifs</h2>
+      <p class="description">Les courses/objectifs qui structurent le plan. Un objectif "principal" reçoit une préparation complète (base → bloc spécifique de 8 semaines → taper d'une semaine) ; un objectif "secondaire" reçoit une préparation plus courte (3 semaines de transition → taper). Deux objectifs "principal" trop proches dans le temps (moins de 6 semaines) : le second est automatiquement traité comme secondaire pour la frise, plutôt que d'ouvrir un deuxième pic de forme complet.</p>
+
+      <div class="reglages-grid">
+        <label for="objectif-nom">Nom
+          <input type="text" id="objectif-nom" placeholder="ex : Trans Percé 75 km">
+        </label>
+        <label for="objectif-date">Date
+          <input type="date" id="objectif-date">
+        </label>
+        <label for="objectif-distance">Distance en km (optionnel)
+          <input type="number" id="objectif-distance" step="0.1" min="0" placeholder="ex : 75">
+        </label>
+        <label for="objectif-denivele">D+ en m (optionnel)
+          <input type="number" id="objectif-denivele" step="1" min="0" placeholder="ex : 2800">
+        </label>
+        <label for="objectif-priorite">Priorité
+          <select id="objectif-priorite">
+            <option value="principale">Principale (préparation complète)</option>
+            <option value="secondaire">Secondaire (préparation courte)</option>
+          </select>
+        </label>
+        <label for="objectif-statut">Statut
+          <select id="objectif-statut">
+            <option value="confirme">Confirmé</option>
+            <option value="non_confirme">Non confirmé</option>
+          </select>
+        </label>
+        <label for="objectif-format">Format / notes (optionnel)
+          <input type="text" id="objectif-format" placeholder="ex : course par étapes, 3 jours">
+        </label>
+      </div>
+      <button id="btn-ajouter-objectif" class="bouton-secondaire">Ajouter l'objectif</button>
+      <button id="btn-annuler-edition-objectif" class="bouton-secondaire bouton-annuler" style="display:none;">Annuler la modification</button>
+      <p id="objectifs-message" class="message-info" style="display:none;"></p>
+
+      <div class="tableau-scroll">
+      <table id="tableau-objectifs" class="tableau-recap">
+        <thead><tr><th>Nom</th><th>Date</th><th>Distance</th><th>D+</th><th>Priorité</th><th>Statut</th><th></th></tr></thead>
+        <tbody id="corps-tableau-objectifs"></tbody>
+      </table>
+      </div>
+      <p id="objectifs-vide-message" class="message-neutre" style="display:none;">Aucun objectif pour l'instant — ajoute-en un ci-dessus pour voir apparaître la frise de périodisation.</p>
+    </section>
+
+    <section id="plan-frise">
+      <h2>📅 Frise de périodisation</h2>
+      <p class="description">Calculée automatiquement à partir des objectifs ci-dessus et de la date du jour. Dates approximatives — le détail de ce que contient chaque bloc (semaines-types, règle saisonnière, substitutions à charge équivalente) reste décrit dans le document de référence pour l'instant, pas encore affiché ici.</p>
+      <div id="zone-frise"></div>
     </section>
 
   </section>
