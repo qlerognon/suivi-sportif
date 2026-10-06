@@ -594,6 +594,21 @@ h1 {
   font-size: 1.1em;
 }
 
+#objectif-nouveau {
+  margin-bottom: 15px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+#objectif-nouveau summary {
+  cursor: pointer;
+  font-weight: bold;
+  color: #2c3e50;
+}
+#objectif-nouveau[open] summary {
+  margin-bottom: 12px;
+}
+
 .bouton-annuler {
   background-color: #7f8c8d;
   margin-left: 8px;
@@ -639,6 +654,8 @@ h1 {
   min-width: 4px;
 }
 .frise-base, .frise-entretien { background-color: #a8c5da; }
+.frise-progressif { background-color: #a8c5da; }
+.frise-assimilation { background-color: #5a7a94; }
 .frise-specifique, .frise-transition_courte { background-color: #4f8fc0; }
 .frise-taper { background-color: #e8a33d; }
 .frise-course { background-color: #c0392b; flex-grow: 0.6 !important; }
@@ -649,6 +666,18 @@ h1 {
   padding-left: 20px;
   font-size: 0.85em;
   color: #555;
+}
+
+/* Sous-liste des cycles progressifs (3 semaines de charge + 1 semaine
+   d'assimilation), à l'intérieur d'un bloc "Base / entretien" — ajoutée le
+   06/10/2026. Plus petite et plus discrète que la liste des blocs
+   principaux, pour bien montrer qu'il s'agit d'un niveau de détail
+   supplémentaire plutôt que d'une liste de blocs au même niveau. */
+.frise-sous-liste {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+  font-size: 0.82em;
+  color: #777;
 }
 
 /* --- Segments (page Records) --- */
