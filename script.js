@@ -594,6 +594,7 @@ const TYPES_ACTIVITE = [
   { cle: 'tapis', libelle: 'Course sur tapis' },
   { cle: 'ski_fond', libelle: 'Ski de fond' },
   { cle: 'musculation', libelle: 'Musculation' },
+  { cle: 'yoga', libelle: 'Yoga' }, // ajouté le 27/11/2026, demande de l'utilisateur
   { cle: 'autre', libelle: 'Autre' }
 ];
 
@@ -639,13 +640,14 @@ function typeParDefautDepuisSportBrut(sportBrut) {
   return '';
 }
 
-// La musculation n'a ni distance, ni allure, ni D+, ni tracé GPS — à la
-// différence de tous les autres sports de la liste (y compris le vélo/la
-// natation/le ski de fond, qui gardent le même affichage que la course pour
-// l'instant). Sert à cacher les champs/graphiques qui n'ont pas de sens pour
-// ce sport, plutôt que d'afficher des zéros trompeurs.
+// La musculation et le yoga (ajouté le 27/11/2026) n'ont ni distance, ni
+// allure, ni D+, ni tracé GPS — à la différence de tous les autres sports de
+// la liste (y compris le vélo/la natation/le ski de fond, qui gardent le
+// même affichage que la course pour l'instant). Sert à cacher les
+// champs/graphiques qui n'ont pas de sens pour ce sport, plutôt que
+// d'afficher des zéros trompeurs.
 function estSportSansDistance(activite) {
-  return activite.typeActivite === 'musculation';
+  return activite.typeActivite === 'musculation' || activite.typeActivite === 'yoga';
 }
 
 // Une activité est "vélo" si elle est classée comme telle (typeActivite),
@@ -5131,7 +5133,7 @@ function afficherIndicateurSaison() {
 
 const TYPES_SEANCE = {
   renforcement:     { libelle: 'Renforcement',                 sportDefaut: 'Musculation',                 zone: null, dureeMin: 45, dureeMax: 60,  substituts: [] },
-  recup_active:     { libelle: 'Récupération active',         sportDefaut: 'Course à pied très facile',   zone: 0,    dureeMin: 20, dureeMax: 35,  substituts: ['Natation', 'Vélo très facile', 'Marche'] },
+  recup_active:     { libelle: 'Récupération active',         sportDefaut: 'Course à pied très facile',   zone: 0,    dureeMin: 20, dureeMax: 35,  substituts: ['Natation', 'Vélo très facile', 'Marche', 'Yoga'] },
   endurance_facile: { libelle: 'Endurance facile',             sportDefaut: 'Course à pied',               zone: 1,    dureeMin: 30, dureeMax: 45,  substituts: ['Natation', 'Vélo facile', 'Marche'] },
   seuil_tempo:      { libelle: 'Seuil / tempo',                sportDefaut: 'Course à pied (route/tapis)', zone: 2,    dureeMin: 40, dureeMax: 60,  substituts: ['Ski de fond soutenu', 'Vélo en tempo'] },
   sortie_longue:    { libelle: 'Sortie longue endurance',      sportDefaut: 'Course à pied',               zone: 1,    dureeMin: 75, dureeMax: 120, substituts: ['Ski de fond (+10-20% durée)', 'Vélo (+10-20% durée)'] },
@@ -5152,7 +5154,7 @@ const SEANCES_TYPES_PAR_BLOC = {
     activites: [
       { type: 'renforcement', quantite: 2, quantiteOptionnelle: 1 },
       { type: 'seuil_tempo', quantite: 1 },
-      { type: 'recup_active', quantite: 1 },
+      { type: 'recup_active', quantite: 1, quantiteOptionnelle: 1 },
       { type: 'endurance_facile', quantite: 1 },
       { type: 'sortie_longue', quantite: 1 }
     ]
@@ -5160,7 +5162,7 @@ const SEANCES_TYPES_PAR_BLOC = {
   assimilation: {
     activites: [
       { type: 'renforcement', quantite: 1 },
-      { type: 'recup_active', quantite: 1 },
+      { type: 'recup_active', quantite: 1, quantiteOptionnelle: 1 },
       { type: 'endurance_facile', quantite: 1 },
       { type: 'intensite_courte', quantite: 1, optionnelle: true }
     ],
@@ -5170,7 +5172,7 @@ const SEANCES_TYPES_PAR_BLOC = {
     activites: [
       { type: 'renforcement', quantite: 2 },
       { type: 'cote_puissance', quantite: 1 },
-      { type: 'recup_active', quantite: 1 },
+      { type: 'recup_active', quantite: 1, quantiteOptionnelle: 1 },
       { type: 'trail_modere', quantite: 1 },
       { type: 'sortie_longue', quantite: 1 }
     ],
