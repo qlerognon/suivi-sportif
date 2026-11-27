@@ -120,6 +120,7 @@
               <option value="tapis">Course sur tapis</option>
               <option value="ski_fond">Ski de fond</option>
               <option value="musculation">Musculation</option>
+              <option value="yoga">Yoga</option>
               <option value="autre">Autre</option>
             </select>
           </label>
@@ -248,6 +249,7 @@
           <option value="tapis">Course sur tapis</option>
           <option value="ski_fond">Ski de fond</option>
           <option value="musculation">Musculation</option>
+          <option value="yoga">Yoga</option>
           <option value="autre">Autre</option>
         </select>
         <button id="btn-valider-type" class="bouton-secondaire">Enregistrer le type</button>
@@ -343,6 +345,7 @@
             <option value="tapis">Course sur tapis</option>
             <option value="ski_fond">Ski de fond</option>
             <option value="musculation">Musculation</option>
+            <option value="yoga">Yoga</option>
             <option value="autre">Autre</option>
           </select>
           <button id="btn-valider-detail-type" class="bouton-secondaire">Enregistrer le type</button>
@@ -646,13 +649,15 @@
     <!-- ============================================================
          PÉRIODES SPÉCIFIQUES (ajouté le 06/10/2026) : des événements
          ponctuels à superposer à la frise calculée (pause forcée, semaine
-         de disponibilité réduite, "weekend choc" déjà prévu), SANS changer
-         le calcul des blocs eux-mêmes — juste un signal visuel/textuel sur
-         les blocs qu'elles recoupent (voir afficherFrise dans script.js).
+         de disponibilité réduite, "weekend choc" déjà prévu). Depuis le
+         06/10/2026, "pause forcée"/"disponibilité réduite" décalent en plus
+         automatiquement la suite des cycles progressifs des blocs
+         base/entretien (voir afficherFrise/calculerFrise dans script.js) —
+         le "weekend choc" reste purement informatif.
          ============================================================ -->
     <section id="plan-periodes">
       <h2>📌 Périodes spécifiques</h2>
-      <p class="description">Des périodes ponctuelles à superposer à la frise : une pause forcée (blessure, voyage, imprévu — aucun entraînement possible), une semaine de disponibilité réduite où il faudra lever le pied, ou un "weekend choc" déjà prévu. Elles sont signalées (⚠️) sur les blocs de la frise ci-dessous qu'elles recoupent, sans changer le calcul des blocs eux-mêmes — pour l'instant, le plan ne se réorganise pas encore automatiquement autour d'elles.</p>
+      <p class="description">Des périodes ponctuelles à superposer à la frise : une pause forcée (blessure, voyage, imprévu — aucun entraînement possible), une semaine de disponibilité réduite où il faudra lever le pied, ou un "weekend choc" déjà prévu. Une pause forcée ou une disponibilité réduite décale automatiquement la suite des cycles progressifs du plan (hors blocs ancrés à une date de course fixe) ; un "weekend choc" reste purement informatif (⚠️ signalé, mais ne décale rien).</p>
 
       <details id="periode-nouvelle">
         <summary>➕ Ajouter une période</summary>
@@ -828,6 +833,7 @@
             <option value="tapis">Course sur tapis</option>
             <option value="ski_fond">Ski de fond</option>
             <option value="musculation">Musculation</option>
+            <option value="yoga">Yoga</option>
             <option value="autre">Autre</option>
           </select>
         </label>
